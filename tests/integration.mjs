@@ -38,6 +38,17 @@ const linked = await demoRequest("demo-link", { body: { code } });
 assert.equal(linked.linked.player, "KairoPvP");
 await demoRequest("demo-link", { body: { code }, status: 404 });
 assert.equal((await stats("matches")).data.length, 4);
+const detail = await demoRequest("stats", { body: { kind: "match-detail", matchId: "demo-1" } });
+assert.equal(detail.data.snapshot.uuid, linked.linked.uuid);
+assert.equal(detail.data.snapshot.inventory.length, 36);
+assert.equal(detail.data.snapshot.inventory[0].material, "DIAMOND_SWORD");
+assert.equal(detail.data.snapshot.armor.length, 4);
+const opponent = detail.data.participants[1].uuid;
+const opponentDetail = await demoRequest("stats", { body: { kind: "match-detail", matchId: "demo-1", target: opponent } });
+assert.equal(opponentDetail.data.snapshot.uuid, opponent);
+assert.equal((await demoRequest("stats", { body: { kind: "match-detail", matchId: "demo-1", target: randomUUID() } })).data, null);
+await demoRequest("stats", { body: { kind: "match-detail", matchId: "../demo-1" }, status: 400 });
+await demoRequest("stats", { owner: "unbound-local", body: { kind: "match-detail", matchId: "demo-1", uuid: linked.linked.uuid }, status: 403 });
 await demoRequest("stats", { owner: "unbound-local", body: { kind: "matches", uuid: linked.linked.uuid }, status: 403 });
 await demoRequest("checkout", { body: { sku: "vip" }, status: 400 });
 
@@ -73,6 +84,19 @@ assert.equal(queryWork.payload.uuid, game.uuid);
 await browser("result?id=" + query.pending, { owner: "other-owner", status: 404 });
 await service("receipt", { id: queryWork.id, lease: queryWork.lease, outcome: "ok", data: [] });
 assert.deepEqual(await browser("result?id=" + query.pending), { status: "done", data: [] });
+
+const detailId = randomUUID();
+const focus = randomUUID();
+const deferred = await browser("stats", { status: 202, body: { kind: "match-detail", matchId: detailId, target: focus, uuid: randomUUID() } });
+const detailsWork = (await service("poll", {})).job;
+assert.equal(detailsWork.id, deferred.pending);
+assert.equal(detailsWork.kind, "match-detail");
+assert.equal(detailsWork.payload.uuid, game.uuid);
+assert.equal(detailsWork.payload.matchId, detailId);
+assert.equal(detailsWork.payload.target, focus);
+await service("receipt", { id: detailsWork.id, lease: detailsWork.lease, outcome: "ok", data: null });
+await browser("result?id=" + deferred.pending, { owner: "other-owner", status: 404 });
+assert.deepEqual(await browser("result?id=" + deferred.pending), { status: "done", data: null });
 
 const { order } = await browser("checkout", { body: { sku: "micet-test" } });
 await browser("pay", { body: { id: order.id } });

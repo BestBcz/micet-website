@@ -4,15 +4,19 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent,
 import {
   DEMO_PLAYER, TEST_SKU, catalog, demoBoards, type Board, type Link, type Match, type Mode, type Order, type Profile,
 } from "@/lib/micet-data";
+import { api, readStats } from "@/lib/micet-client";
+import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
+import { ServerHome } from "./server-home";
+import { MatchDetailPage } from "./match-detail";
 import "./micet.css";
 
-type View = "home" | "ranking" | "player" | "matches" | "shop" | "orders" | "account";
-type Route = { view: View; player?: string };
+type View = "home" | "stats" | "ranking" | "player" | "matches" | "match" | "shop" | "orders" | "account";
+type Route = { view: View; player?: string; matchId?: string };
 type SiteStatus = { mode: Mode; linked: Link | null; connected: boolean };
 type Code = { code: string; expiresAt: number };
 
-const views: View[] = ["home", "ranking", "player", "matches", "shop", "orders", "account"];
-const menu: Array<[View, string]> = [["home", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "Tag 商店"]];
+const views: View[] = ["home", "stats", "ranking", "player", "matches", "match", "shop", "orders", "account"];
+const menu: Array<[View, string]> = [["home", "首页"], ["stats", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "Tag 商店"]];
 const formatNumber = (value: number | null) => value === null ? "—" : value.toLocaleString("en-US");
 const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -21,38 +25,20 @@ const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
 function parseRoute(): Route {
   const [raw, name] = window.location.hash.slice(1).split("/");
   if (!views.includes(raw as View)) return { view: "home" };
+  if (raw === "match") {
+    return name && (demoMatchPattern.test(name) || matchUuidPattern.test(name))
+      ? { view: "match", matchId: name.toLowerCase() } : { view: "matches" };
+  }
   if (raw !== "player") return { view: raw as View };
   if (!name || !/^[A-Za-z0-9_]{1,16}$/.test(name)) return { view: "home" };
   return { view: "player", player: name };
-}
-
-async function api<T>(action: string, body?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-  const response = await fetch("/api/micet/" + action, {
-    signal,
-    ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
-  });
-  const json = await response.json() as { error?: string };
-  if (!response.ok) throw new Error(json.error ?? "请求失败，请稍后再试。");
-  return json as T;
-}
-
-async function readStats<T>(kind: string, signal: AbortSignal, name?: string): Promise<T> {
-  const initial = await api<{ data?: T; pending?: string }>("stats", { kind, ...(name ? { name } : {}) }, signal);
-  if (!initial.pending) return initial.data as T;
-  for (let attempt = 0; attempt < 17; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 750));
-    const result = await api<{ status: string; data: T }>("result?id=" + encodeURIComponent(initial.pending), undefined, signal);
-    if (result.status === "done") return result.data;
-    if (result.status === "failed") throw new Error("测试服暂时无法返回战绩。");
-  }
-  throw new Error("连接游戏服超时，请重试。");
 }
 
 function Avatar({ name }: { name: string }) {
   return <span aria-hidden="true" className="avatar">{name.slice(0, 1).toUpperCase()}</span>;
 }
 
-function HeroTitle() {
+function HeroTitle({ home = false }: { home?: boolean }) {
   const ref = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const heading = ref.current;
@@ -68,6 +54,10 @@ function HeroTitle() {
 
   const letters = (text: string, offset: number) => Array.from(text, (letter, index) =>
     <span className="title-letter" key={index} style={{ "--letter-delay": (offset + index) * 35 + "ms" } as CSSProperties}>{letter}</span>);
+
+  if (home) return <h1 id="server-title" className="hero-title server-title" ref={ref} aria-label="MiCet.cc">
+    <span className="title-line" aria-hidden="true">{letters("MiCet", 0)}<span className="title-accent">{letters(".cc", 5)}</span></span>
+  </h1>;
 
   return <h1 id="hero-title" className="hero-title" ref={ref} aria-label="MiCet 竞技战绩">
     <span className="title-line title-brand" aria-hidden="true">{letters("MiCet", 0)}</span>
@@ -153,7 +143,7 @@ function ProfilePage({ name, mode }: { name: string; mode: Mode }) {
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     const stop = new AbortController();
-    readStats<Profile | null>("profile", stop.signal, name).then(setProfile).catch(err => { if (!stop.signal.aborted) setError(err.message); });
+    readStats<Profile | null>("profile", stop.signal, { name }).then(setProfile).catch(err => { if (!stop.signal.aborted) setError(err.message); });
     return () => stop.abort();
   }, [name, retry]);
   const global = profile?.scores.find(score => score.id === "global");
@@ -201,10 +191,10 @@ function MatchesPage({ linked }: { linked: Link | null | undefined }) {
         : error ? <Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
         : !matches ? <Message>正在查询近期对局…</Message>
         : matches.length === 0 ? <Message>最近 7 天暂无可查看的对局。</Message>
-        : matches.map(match => <article key={match.id} className="list-row">
+        : matches.map(match => <a key={match.id} className="list-row match-link" href={"#match/" + match.id}>
           <div><strong>{match.kit} · {match.opponents.length ? match.opponents.join(" / ") : "未知对手"}</strong><small>{match.ranked ? "排位" : "非排位"} · {formatDate(match.endedAt)}</small></div>
-          <div className={"result " + match.result}>{labels[match.result]}{match.delta !== null && <div>{match.delta > 0 ? "+" : ""}{match.delta} Elo</div>}</div>
-        </article>)}
+          <div className={"result " + match.result}>{labels[match.result]}{match.delta !== null && <div>{match.delta > 0 ? "+" : ""}{match.delta} Elo</div>}<span className="match-link-label">查看详情</span></div>
+        </a>)}
     </div>
   </>;
 }
@@ -348,12 +338,13 @@ export function MicetSite({ mode }: { mode: Mode }) {
     <header className="site-header"><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><span className="mark" aria-hidden="true" /><span>MiCet.cc</span></a>
       <nav aria-label="站点导航">{menu.map(([key, label]) =>
-        <a key={key} href={"#" + key} aria-current={view === key || (key === "home" && view === "player") ? "page" : undefined}>{label}</a>)}</nav>
+        <a key={key} href={"#" + key} aria-current={view === key || (key === "stats" && view === "player") || (key === "matches" && view === "match") ? "page" : undefined}>{label}</a>)}</nav>
       <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
       {statusError && <p className="inline-error" role="alert">{statusError} <button className="btn" onClick={() => void refreshStatus().catch(() => {})}>重试</button></p>}
-      {view === "home" && <>
+      {view === "home" && <ServerHome title={<HeroTitle home />} />}
+      {view === "stats" && <>
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-meta">
             <span className="hero-context">Minecraft PvP</span>
@@ -373,6 +364,7 @@ export function MicetSite({ mode }: { mode: Mode }) {
       {view === "ranking" && <><PageIntro name="Elo 排行榜"><p>{mode === "demo" ? "示例数据 · " : ""}查看综合与各玩法前十名。</p></PageIntro><Ranking mode={mode} /></>}
       {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} />}
       {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
+      {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
       {view === "shop" && <ShopPage linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />}
       {view === "orders" && <OrdersPage mode={mode} focus={orderFocus} />}
       {view === "account" && <AccountPage mode={mode} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}

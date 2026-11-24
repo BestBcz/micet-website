@@ -1,0 +1,11 @@
+# Start with an isolated staging server and test database.
+enabled: false
+site-url: ""
+# Set both credentials for the private Sites origin via the server's secret configuration.
+site-service-token: ""
+bridge-secret: ""
+# Create a regular, non-stackable AquaCore Tag with this identifier on staging.
+test-tag: MICET_TEST
+# Add UUIDs of human test accounts. Empty blocks all grants.
+allowed-player-uuids: []
+poll-seconds: 3

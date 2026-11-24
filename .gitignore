@@ -19,6 +19,7 @@ next-env.d.ts
 
 # Test output
 /coverage/
+/bridge/build/
 
 # Package-manager logs
 npm-debug.log*

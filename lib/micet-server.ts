@@ -1,5 +1,7 @@
 import { env } from "cloudflare:workers";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { demoMatchPattern, getDemoMatchDetail, matchUuidPattern } from "./micet-match-detail";
+import { getServerStatus } from "./micet-server-status";
 import { DEMO_PLAYER, TEST_SKU, demoBoards, getDemoMatches, getDemoProfile, type Link, type Mode, type Order } from "./micet-data";
 
 type Body = Record<string, unknown>;
@@ -10,7 +12,7 @@ type Job = {
 
 const playerPattern = /^[A-Za-z0-9_]{1,16}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const jobKinds = ["boards", "profile", "matches"];
+const jobKinds = ["boards", "profile", "matches", "match-detail"];
 const codeLifetime = 5 * 60_000;
 const queryLifetime = 45_000;
 const leaseLifetime = 20_000;
@@ -133,9 +135,13 @@ async function browserGet(db: D1Database, action: string, request: Request, owne
   }
   if (action === "result") {
     const id = new URL(request.url).searchParams.get("id") ?? "";
-    const job = await db.prepare("SELECT status,result FROM bridge_jobs WHERE id=? AND owner=? AND mode=? AND expires_at>?")
-      .bind(id, owner, mode, Date.now()).first<Pick<Job, "status" | "result">>();
+    const job = await db.prepare("SELECT kind,payload,status,result FROM bridge_jobs WHERE id=? AND owner=? AND mode=? AND expires_at>?")
+      .bind(id, owner, mode, Date.now()).first<Pick<Job, "kind" | "payload" | "status" | "result">>();
     if (!job) throw new RequestError(404, "查询已过期，请重新尝试。");
+    if (job.kind === "match-detail" || job.kind === "matches") {
+      const linked = await playerLink(db, owner, mode);
+      if (linked?.uuid !== JSON.parse(job.payload).uuid) throw new RequestError(404, "查询已过期，请重新尝试。");
+    }
     return json({ status: job.status, data: job.result ? JSON.parse(job.result) : null });
   }
   throw new RequestError(404, "找不到页面。");
@@ -146,9 +152,19 @@ async function stats(db: D1Database, body: Body, owner: string, mode: Mode) {
   if (!jobKinds.includes(kind)) throw new RequestError(400, "无效的查询类型。");
   const name = stringField(body, "name");
   if (kind === "profile" && !playerPattern.test(name)) throw new RequestError(400, "请输入有效的 Minecraft 玩家名。");
-  const link = kind === "matches" ? await playerLink(db, owner, mode) : null;
-  if (kind === "matches" && !link) throw new RequestError(403, "绑定游戏账号后即可查看对局。");
+  const matchId = stringField(body, "matchId").toLowerCase();
+  const target = stringField(body, "target").toLowerCase();
+  if (kind === "match-detail") {
+    const pattern = mode === "demo" ? demoMatchPattern : matchUuidPattern;
+    if (!pattern.test(matchId) || (target && !matchUuidPattern.test(target))) {
+      throw new RequestError(400, "对局或玩家编号无效。");
+    }
+  }
+  const needsPlayer = kind === "matches" || kind === "match-detail";
+  const link = needsPlayer ? await playerLink(db, owner, mode) : null;
+  if (needsPlayer && !link) throw new RequestError(403, "绑定游戏账号后即可查看对局。");
   if (mode === "demo") {
+    if (kind === "match-detail") return json({ data: getDemoMatchDetail(link!.uuid, matchId, target) });
     const data = kind === "boards" ? demoBoards : kind === "profile" ? getDemoProfile(name) : getDemoMatches(link!.uuid);
     return json({ data });
   }
@@ -159,7 +175,7 @@ async function stats(db: D1Database, body: Body, owner: string, mode: Mode) {
     .bind(owner, now).first<{ count: number }>();
   if ((pending?.count ?? 0) >= 6) throw new RequestError(429, "查询过多，请稍后再试。");
   const id = crypto.randomUUID();
-  const payload = JSON.stringify(kind === "matches" ? { uuid: link!.uuid, player: link!.player } : { name });
+  const payload = JSON.stringify(link ? { uuid: link.uuid, player: link.player, ...(kind === "match-detail" ? { matchId, target } : {}) } : { name });
   await db.prepare("INSERT INTO bridge_jobs (id,owner,kind,mode,payload,status,created_at,expires_at) VALUES (?,?,?,?,?,'queued',?,?)")
     .bind(id, owner, kind, mode, payload, now, now + queryLifetime).run();
   return json({ pending: id }, 202);
@@ -283,6 +299,7 @@ export async function micetApi(request: Request, area: string, action: string) {
       return await bridgePost(database(), action, body);
     }
     if (area !== "micet") throw new RequestError(404, "找不到页面。");
+    if (!body && action === "server-status") return json(await getServerStatus(env.MICET_STATUS_URL));
     const owner = await ownerId(request);
     if (body && request.headers.get("origin") !== new URL(request.url).origin) {
       throw new RequestError(403, "请求来源无效。");

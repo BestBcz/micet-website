@@ -61,6 +61,9 @@ export default defineConfig(async ({ command }) => {
         inspectorPort: false,
         config: {
           ...localBindingConfig,
+          ...(command === "serve" && process.env.MICET_STATUS_URL
+            ? { vars: { MICET_STATUS_URL: process.env.MICET_STATUS_URL } }
+            : {}),
           ...(command === "serve"
             ? {
                 services: [

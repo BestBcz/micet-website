@@ -4,5 +4,6 @@ declare namespace Cloudflare {
     MICET_MODE?: string;
     MICET_BRIDGE_SECRET?: string;
     MICET_LOCAL_TEST?: string;
+    MICET_STATUS_URL?: string;
   }
 }
