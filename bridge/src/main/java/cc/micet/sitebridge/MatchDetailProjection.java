@@ -4,6 +4,8 @@ import eu.bcz.micetpvp.MicetPvP;
 import eu.bcz.micetpvp.kittype.HealingMethod;
 import eu.bcz.micetpvp.match.history.MatchHistoryRecord;
 import eu.bcz.micetpvp.postmatchinv.PostMatchPlayer;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,8 +24,10 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.potion.Potion;
 import org.bukkit.potion.PotionEffect;
 
-/** Projects one authorized snapshot without exposing serialized Bukkit data. */
+/** Projects authorized snapshots without exposing serialized Bukkit data. */
 final class MatchDetailProjection {
+    private static final int MATCH_DETAIL_BYTE_BUDGET = 900_000;
+
     private MatchDetailProjection() {}
 
     static JsonElement project(String payload, UUID id, long endedAt, UUID viewer, UUID target) {
@@ -34,8 +38,8 @@ final class MatchDetailProjection {
         if (players == null || players.isEmpty() || record.getTeams() == null) return JsonNull.INSTANCE;
 
         JsonArray participants = new JsonArray();
+        Map<UUID, Integer> participantTeams = new LinkedHashMap<>();
         UUID selected = target == null && players.containsKey(viewer) ? viewer : target;
-        int selectedTeam = -1;
         for (int team = 0; team < record.getTeams().size(); team++) {
             for (UUID member : record.getTeams().get(team)) {
                 PostMatchPlayer player = players.get(member);
@@ -45,11 +49,11 @@ final class MatchDetailProjection {
                 entry.addProperty("name", player.getLastUsername());
                 entry.addProperty("team", team);
                 participants.add(entry);
+                participantTeams.put(member, team);
                 if (selected == null) selected = member;
-                if (selected.equals(member)) selectedTeam = team;
             }
         }
-        if (selectedTeam < 0 || selected == null) return JsonNull.INSTANCE;
+        if (!participantTeams.containsKey(selected)) return JsonNull.INSTANCE;
         JsonObject captures = raw.getAsJsonObject("players");
         JsonObject saved = captures == null ? null : captures.getAsJsonObject(selected.toString());
         if (saved == null) return JsonNull.INSTANCE;
@@ -65,7 +69,24 @@ final class MatchDetailProjection {
         result.add("winnerTeam", winner >= 0 ? new JsonPrimitive(winner) : JsonNull.INSTANCE);
         result.addProperty("endReason", record.getEndReason());
         result.add("participants", participants);
-        result.add("snapshot", snapshot(players.get(selected), saved, selected, record, selectedTeam));
+        result.add("snapshot", snapshot(players.get(selected), saved, selected, record, participantTeams.get(selected)));
+        if (target == null) {
+            // Keep room for the receipt envelope and load any remaining players separately on large matches.
+            int remaining = MATCH_DETAIL_BYTE_BUDGET - result.toString().getBytes(StandardCharsets.UTF_8).length;
+            JsonArray otherSnapshots = new JsonArray();
+            for (Map.Entry<UUID, Integer> participant : participantTeams.entrySet()) {
+                UUID member = participant.getKey();
+                if (member.equals(selected)) continue;
+                JsonObject capture = captures.getAsJsonObject(member.toString());
+                if (capture == null) continue;
+                JsonObject other = snapshot(players.get(member), capture, member, record, participant.getValue());
+                int bytes = other.toString().getBytes(StandardCharsets.UTF_8).length + 1;
+                if (bytes > remaining) break;
+                otherSnapshots.add(other);
+                remaining -= bytes;
+            }
+            result.add("otherSnapshots", otherSnapshots);
+        }
         return result;
     }
 

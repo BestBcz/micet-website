@@ -45,7 +45,7 @@ async function ownerId(request: Request) {
   throw new RequestError(401, "请先登录站点。");
 }
 
-async function readBody(request: Request): Promise<Body> {
+async function readBody(request: Request, maxBytes = 100_000): Promise<Body> {
   const reader = request.body?.getReader();
   if (!reader) throw new RequestError(400, "请求格式无效。");
   const decoder = new TextDecoder();
@@ -55,7 +55,7 @@ async function readBody(request: Request): Promise<Body> {
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 100_000) {
+    if (size > maxBytes) {
       await reader.cancel();
       throw new RequestError(413, "请求过大。");
     }
@@ -353,7 +353,7 @@ export async function micetApi(request: Request, area: string, action: string) {
     if (isPublicLaunch()) throw new RequestError(404, "该功能暂未开放。");
     if (area === "bridge" && request.method === "POST") {
       await requireBridge(request);
-      return await bridgePost(database(), action, await readBody(request));
+      return await bridgePost(database(), action, await readBody(request, action === "receipt" ? 1_000_000 : undefined));
     }
     if (area !== "micet") throw new RequestError(404, "找不到页面。");
     if (isSelfHosted()) return await selfHostedBrowser(database(), request, action);

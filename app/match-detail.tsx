@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { readStats } from "@/lib/micet-client";
 import type { Link, Mode } from "@/lib/micet-data";
 import type { InventoryItem, MatchDetail, MatchSnapshot } from "@/lib/micet-match-detail";
+import { itemTexture, potionOverlay, potionTint } from "./match-item-textures";
 import "./match-detail.css";
 
 const items: Record<string, string> = {
@@ -90,15 +91,22 @@ function SlotRow({ slots, label, active, onSelect }: {
         if (!slot.item) return <span key={slot.id} className="item-slot empty" aria-hidden="true" />;
         const item = slot.item;
         const name = itemName(item);
+        const texture = itemTexture(item);
         const short = item.material.split("_").at(-1)?.slice(0, 2);
         return <button key={slot.id} type="button"
           className={"item-slot" + (item.enchantments.length ? " enchanted" : "")}
           title={name} aria-pressed={slot.id === active}
           aria-label={slot.title + " · " + name + " ×" + item.count}
           onClick={() => onSelect(slot)}>
-          <span className={"item-icon " + iconKind(item.material) + " " + iconTone(item)} aria-hidden="true">
-            {iconKind(item.material) === "other" ? short : null}
+          {texture ? <span className="item-icon item-texture" aria-hidden="true">
+            {item.material === "POTION" && potionOverlay && <span className="potion-fill" style={{
+              "--potion-overlay": `url("${potionOverlay}")`, "--potion-tint": potionTint(item),
+            } as CSSProperties} />}
+            <img src={texture} alt="" />
           </span>
+            : <span className={"item-icon " + iconKind(item.material) + " " + iconTone(item)} aria-hidden="true">
+              {iconKind(item.material) === "other" ? short : null}
+            </span>}
           {item.count > 1 && <span className="item-count" aria-hidden="true">{item.count}</span>}
           {item.maxDamage != null && item.damage != null && item.damage > 0 && <span className="slot-durability" aria-hidden="true">
             <span style={{ width: (Math.max(0, item.maxDamage - item.damage) / item.maxDamage) * 100 + "%" }} />
@@ -185,10 +193,32 @@ function PlayerCapture({ snapshot, player }: { snapshot: MatchSnapshot; player: 
   </div>;
 }
 
+async function loadMatch(id: string, signal: AbortSignal) {
+  const detail = await readStats<MatchDetail | null>("match-detail", signal, { matchId: id });
+  if (!detail) return null;
+  const snapshots = new Map([detail.snapshot, ...(detail.otherSnapshots ?? [])].map(snapshot => [snapshot.uuid, snapshot]));
+  // Older bridges and exceptionally large matches can return fewer snapshots in the first response.
+  for (const { uuid } of detail.participants) {
+    if (snapshots.has(uuid)) continue;
+    const result = await readStats<MatchDetail | null>("match-detail", signal, { matchId: id, target: uuid });
+    if (result) snapshots.set(result.snapshot.uuid, result.snapshot);
+  }
+  signal.throwIfAborted();
+  const textures = new Set<string>();
+  for (const snapshot of snapshots.values()) {
+    for (const item of [...(snapshot.inventory ?? []), ...(snapshot.armor ?? [])]) {
+      const texture = item && itemTexture(item);
+      if (texture) textures.add(texture);
+      if (item?.material === "POTION" && potionOverlay) textures.add(potionOverlay);
+    }
+  }
+  for (const texture of textures) new Image().src = texture;
+  return { detail, snapshots };
+}
+
 export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Link | null; mode: Mode }) {
-  const [detail, setDetail] = useState<MatchDetail | null>();
+  const [match, setMatch] = useState<Awaited<ReturnType<typeof loadMatch>>>();
   const [target, setTarget] = useState("");
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const viewer = linked?.uuid;
@@ -196,30 +226,23 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
   useEffect(() => {
     if (!viewer) return;
     const stop = new AbortController();
-    readStats<MatchDetail | null>("match-detail", stop.signal, { matchId: id, target })
+    loadMatch(id, stop.signal)
       .then(result => {
         if (stop.signal.aborted) return;
-        setDetail(result);
-        setLoading(false);
+        setMatch(result);
       }).catch(err => {
         if (stop.signal.aborted) return;
         setError(err.message);
-        setLoading(false);
       });
     return () => stop.abort();
-  }, [id, target, viewer, retry]);
+  }, [id, viewer, retry]);
 
-  const player = detail?.participants.find(participant => participant.uuid === detail.snapshot.uuid);
+  const detail = match?.detail;
   const selected = target || detail?.snapshot.uuid;
-  const choosePlayer = (uuid: string) => {
-    if (uuid === selected) return;
-    setTarget(uuid);
-    setError("");
-    setLoading(true);
-  };
+  const player = detail?.participants.find(participant => participant.uuid === selected);
+  const snapshot = selected ? match?.snapshots.get(selected) : undefined;
   const retryRequest = () => {
     setError("");
-    setLoading(true);
     setRetry(value => value + 1);
   };
 
@@ -230,8 +253,8 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
       {detail && <p>{[detail.kit, detail.map, detail.ranked ? "排位" : "非排位", mode === "demo" ? "示例对局" : null].filter(Boolean).join(" · ")}</p>}
     </header>
     {linked === null ? <div className="panel"><p className="message"><a className="btn primary" href="#account">绑定游戏账号后查看</a></p></div>
-      : !linked || (loading && !detail) ? <div className="panel"><p role="status" className="message">正在读取对局详情…</p></div>
-      : !detail && error ? <div className="panel"><p role="alert" className="message error">{error} <button className="btn" onClick={retryRequest}>重试</button></p></div>
+      : !linked || (match === undefined && !error) ? <div className="panel"><p role="status" className="message">正在读取对局详情和物品栏…</p></div>
+      : error ? <div className="panel"><p role="alert" className="message error">{error} <button className="btn" onClick={retryRequest}>重试</button></p></div>
       : !detail ? <div className="panel"><p role="status" className="message">这场对局已过期、未保存或当前账号无权查看。</p></div>
       : <>
         <div className="match-meta">
@@ -241,15 +264,13 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
           </p>
           <div className="match-participants" aria-label="选择对局玩家">
             {detail.participants.map(entry => <button key={entry.uuid} className="pill" aria-pressed={entry.uuid === selected}
-              onClick={() => choosePlayer(entry.uuid)}>
+              onClick={() => setTarget(entry.uuid)}>
               {entry.name}{entry.uuid === viewer ? "（我）" : ""}
               <span>{detail.winnerTeam === null ? "平局" : detail.winnerTeam === entry.team ? "胜利" : "战败"}</span>
             </button>)}
           </div>
         </div>
-        {loading ? <div className="panel"><p role="status" className="message">正在读取玩家的物品栏…</p></div>
-          : error ? <div className="panel"><p role="alert" className="message error">{error} <button className="btn" onClick={retryRequest}>重试</button></p></div>
-          : player ? <PlayerCapture key={player.uuid} snapshot={detail.snapshot} player={player.name} />
+        {player && snapshot ? <PlayerCapture key={player.uuid} snapshot={snapshot} player={player.name} />
           : <div className="panel"><p role="status" className="message">这场对局没有保存该玩家的物品栏。</p></div>}
       </>}
   </section>;

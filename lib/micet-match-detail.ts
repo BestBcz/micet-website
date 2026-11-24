@@ -44,6 +44,7 @@ export type MatchDetail = {
   endReason: string | null;
   participants: { uuid: string; name: string; team: number }[];
   snapshot: MatchSnapshot;
+  otherSnapshots?: MatchSnapshot[];
 };
 
 function item(material: string, data: Partial<Omit<InventoryItem, "material">> = {}): InventoryItem {
@@ -101,6 +102,7 @@ export function getDemoMatchDetail(viewer: string, id: string, requestedTarget: 
   return {
     id, kit: match.kit, map: noDebuff ? "练习场" : null, startedAt: match.endedAt - (noDebuff ? 128_000 : 53_000),
     endedAt: match.endedAt, ranked: match.ranked, winnerTeam, endReason: null, participants,
+    ...(requestedTarget ? {} : { otherSnapshots: [getDemoMatchDetail(viewer, id, opponent.uuid)!.snapshot] }),
     snapshot: {
       uuid: target.uuid, inventory, armor: equipped ? diamondArmor(selfView ? 63 : 78) : [null, null, null, null],
       health: won ? 13.5 : winnerTeam !== null ? 0 : 8, hunger: selfView ? 18 : 15,

@@ -1,6 +1,6 @@
 name: MicetSiteBridge
 main: cc.micet.sitebridge.SiteBridge
-version: 0.3.1
+version: 0.3.2
 depend: [MicetPvP, AquaCore]
 commands:
   micetlink:

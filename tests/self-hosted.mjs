@@ -113,10 +113,17 @@ test("self-hosted account binding and read-only bridge", async t => {
   assert.equal(job.id, history.json.pending);
   assert.equal(job.payload.uuid, alice.uuid);
   assert.equal(job.payload.matchId, matchId);
-  await bridge("receipt", { id: job.id, lease: job.lease, outcome: "ok", data: { id: matchId } });
+  const filledInventory = Array.from({ length: 36 }, () => ({ material: "DIAMOND_SWORD", lore: Array(7).fill("测试".repeat(50)) }));
+  const detail = {
+    id: matchId,
+    snapshot: { uuid: alice.uuid, inventory: filledInventory },
+    otherSnapshots: [{ uuid: bob.uuid, inventory: filledInventory }],
+  };
+  assert.ok(Buffer.byteLength(JSON.stringify(detail)) > 100_000);
+  await bridge("receipt", { id: job.id, lease: job.lease, outcome: "ok", data: detail });
   await browser("result?id=" + job.id, 401);
   await browser("result?id=" + job.id, 404, { cookie: bob.session });
-  assert.equal((await browser("result?id=" + job.id, 200, { cookie: alice.session })).json.data.id, matchId);
+  assert.deepEqual((await browser("result?id=" + job.id, 200, { cookie: alice.session })).json.data, detail);
   await browser("logout", 200, { body: {}, cookie: alice.session });
   await browser("result?id=" + job.id, 401, { cookie: alice.session });
   assert.equal((await browser("status", 200, { cookie: alice.session })).json.linked, null);
