@@ -27,12 +27,13 @@ test("self-hosted account binding and read-only bridge", async t => {
   });
   t.after(() => worker.dispose());
   const db = await worker.getD1Database("DB");
-  for (const migration of ["0000_workable_the_leader.sql", "0001_website_binding.sql"]) {
+  async function applyMigration(migration) {
     const sql = await readFile("drizzle/" + migration, "utf8");
     for (const statement of sql.split("--> statement-breakpoint").map(part => part.trim()).filter(Boolean)) {
       await db.prepare(statement).run();
     }
   }
+  await applyMigration("0000_workable_the_leader.sql");
 
   async function request(path, status, { body, cookie, origin = siteOrigin, secret, headers = {} } = {}) {
     const response = await worker.dispatchFetch(base + "/api/" + path, {
@@ -58,6 +59,9 @@ test("self-hosted account binding and read-only bridge", async t => {
   await request("bridge/poll", 401, { body: {}, secret: "invalid" });
   assert.equal((await bridge("poll")).json.job, null);
   assert.equal((await browser("status")).json.linked, null);
+  const missingSchema = await browser("code", 503, { body: {} });
+  assert.match(missingSchema.json.error, /数据库尚未初始化/);
+  await applyMigration("0001_website_binding.sql");
   await browser("player?name=bad%20name", 400);
   await browser("checkout", 404, { body: { sku: "micet-test" } });
   await browser("code", 403, { body: {}, origin: "https://other.example.invalid" });
@@ -83,7 +87,7 @@ test("self-hosted account binding and read-only bridge", async t => {
 
   async function link(player) {
     const uuid = randomUUID();
-    const result = await browser("code", 200, { body: {} });
+    const result = await browser("code", 200, { body: {}, headers: { "CF-Connecting-IP": "192.0.2.10" } });
     assert.match(result.cookies[0], /^__Host-micet-challenge=[0-9a-f]{64}; Path=\/; Max-Age=300; Secure; HttpOnly; SameSite=Strict$/);
     const challenge = result.cookies[0].split(";")[0];
     await browser("confirm", 409, { body: {}, cookie: challenge });

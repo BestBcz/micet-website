@@ -62,7 +62,7 @@ final class GameStats {
         if (currentName == null) return JsonNull.INSTANCE;
         JsonObject result = entry(id, currentName);
         JsonArray scores = new JsonArray();
-        for (Ladder ladder : ladders()) {
+        for (Ladder ladder : ladders(false)) {
             Document stats = counters == null ? null : counters.get(ladder.key, Document.class);
             Object elo = rating == null ? null : rating.get(ladder.key);
             JsonObject score = ladder.description();
@@ -78,7 +78,7 @@ final class GameStats {
     JsonArray boards() throws Exception {
         JsonArray boards = new JsonArray();
         MongoCollection<Document> ratings = mongo.getCollection("elo");
-        for (Ladder ladder : ladders()) {
+        for (Ladder ladder : ladders(true)) {
             JsonArray entries = new JsonArray();
             Bson projection = new Document("players", 1).append("lastUsername", 1).append(ladder.key, 1);
             try (MongoCursor<Document> cursor = ratings.find(Filters.and(solo(), Filters.exists(ladder.key)))
@@ -167,11 +167,12 @@ final class GameStats {
                 .get(5, TimeUnit.SECONDS);
     }
 
-    private List<Ladder> ladders() throws Exception {
+    private List<Ladder> ladders(boolean rankedOnly) throws Exception {
         return Bukkit.getScheduler().callSyncMethod(plugin, () -> {
             List<Ladder> ladders = new ArrayList<>();
             ladders.add(new Ladder("GLOBAL", "综合"));
             for (KitType kit : KitType.getAllTypes()) {
+                if (rankedOnly && (!kit.isSupportsRanked() || kit.isHidden())) continue;
                 String key = kit.getId();
                 if (key.matches("[A-Za-z0-9_-]{1,40}") && !"GLOBAL".equalsIgnoreCase(key))
                     ladders.add(new Ladder(key, stripColor(kit.getDisplayName())));

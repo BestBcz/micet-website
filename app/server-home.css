@@ -43,8 +43,7 @@
   padding-bottom: var(--spacing-16);
 }
 .server-list-head h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
-.motd-actions { display: flex; gap: .5rem; }
-.motd-actions .btn { padding-inline: .65rem; font-size: .85rem; }
+.server-list-head .btn { padding-inline: .65rem; font-size: .85rem; }
 .server-entry {
   display: grid;
   grid-template-columns: 4rem minmax(0, 1fr) auto;

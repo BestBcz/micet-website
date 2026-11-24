@@ -15,23 +15,28 @@ const colorCodes: Record<string, string> = {
 function ObfuscatedText({ text }: { text: string }) {
   const [display, setDisplay] = useState(text);
   useEffect(() => {
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     const timer = setInterval(() => {
-      if (!document.hidden) setDisplay(text.replace(/[!-~]/g, () => characters[Math.floor(Math.random() * characters.length)]));
+      if (!document.hidden && !motion.matches) setDisplay(text.replace(/[!-~]/g, () => characters[Math.floor(Math.random() * characters.length)]));
     }, 120);
     return () => clearInterval(timer);
   }, [text]);
   return <><span className="motd-sr-text">{text}</span><span aria-hidden="true">{display}</span></>;
 }
 
-function MotdLine({ line, paused }: { line: string; paused: boolean }) {
+function MotdLine({ line }: { line: string }) {
   let style: CSSProperties = {};
   let underline = false;
   let strike = false;
   let obfuscated = false;
-  return <div className="motd-line">{line.split(/(§x(?:§[0-9a-f]){6}|§[0-9a-fk-or])/gi).map((part, i) => {
-    if (!part) return null;
-    if (i % 2 === 0) return <span key={i} style={style}>{obfuscated && !paused ? <ObfuscatedText key={part} text={part} /> : part}</span>;
+  const runs: { text: string; style: CSSProperties; obfuscated: boolean }[] = [];
+  for (const [i, part] of line.split(/(§x(?:§[0-9a-f]){6}|§[0-9a-fk-or])/gi).entries()) {
+    if (!part) continue;
+    if (i % 2 === 0) {
+      runs.push({ text: part, style, obfuscated });
+      continue;
+    }
     const code = part[1].toLowerCase();
     if (code === "r" || colorCodes[code] || code === "x") {
       const color = code === "x" ? "#" + part.slice(2).replaceAll("§", "") : colorCodes[code];
@@ -48,8 +53,9 @@ function MotdLine({ line, paused }: { line: string; paused: boolean }) {
       strike ||= code === "m";
       style = { ...style, textDecorationLine: [underline && "underline", strike && "line-through"].filter(Boolean).join(" ") };
     }
-    return null;
-  })}</div>;
+  }
+  return <div className="motd-line">{runs.map(({ text, style, obfuscated }, index) =>
+    <span key={index} style={style}>{obfuscated ? <ObfuscatedText key={text} text={text} /> : text}</span>)}</div>;
 }
 
 const stateText = {
@@ -60,9 +66,7 @@ const stateText = {
 
 function ServerRow() {
   const [status, setStatus] = useState<ServerStatus | null>();
-  const [paused, setPaused] = useState(false);
   const [revision, refresh] = useState(0);
-  useEffect(() => setPaused(window.matchMedia("(prefers-reduced-motion: reduce)").matches), []);
 
   useEffect(() => {
     const stop = new AbortController();
@@ -78,24 +82,21 @@ function ServerRow() {
         if (!stop.signal.aborted) setStatus(null);
       } finally {
         fetching = false;
-        if (!paused && !stop.signal.aborted && !document.hidden) timer = setTimeout(update, 2500);
+        if (!stop.signal.aborted && !document.hidden) timer = setTimeout(update, 2500);
       }
     }
-    const changed = () => { clearTimeout(timer); if (!paused) void update(); };
+    const changed = () => { clearTimeout(timer); void update(); };
     void update();
     document.addEventListener("visibilitychange", changed);
     return () => { stop.abort(); clearTimeout(timer); document.removeEventListener("visibilitychange", changed); };
-  }, [paused, revision]);
+  }, [revision]);
   const state = status?.state ?? "unknown";
   const count = status?.onlinePlayers == null ? null : status.maxPlayers == null
     ? status.onlinePlayers + " 在线" : status.onlinePlayers + " / " + status.maxPlayers;
   return <section className="server-list" aria-labelledby="server-list-title">
     <div className="server-list-head">
-      <h2 id="server-list-title">多人游戏</h2>
-      <div className="motd-actions">
-        {paused && <button className="btn" type="button" onClick={() => refresh(value => value + 1)}>刷新</button>}
-        <button className="btn" type="button" onClick={() => setPaused(value => !value)}>{paused ? "继续更新" : "暂停更新"}</button>
-      </div>
+      <h2 id="server-list-title">服务器状态</h2>
+      <button className="btn" type="button" onClick={() => refresh(value => value + 1)}>刷新</button>
     </div>
     <div className="server-entry">
       <div className="server-icon">
@@ -103,8 +104,8 @@ function ServerRow() {
       </div>
       <div className="server-entry-content">
         <h3>Minecraft 服务器</h3>
-        {status?.motd.length ? status.motd.map((line, i) => <MotdLine key={i} line={line} paused={paused} />)
-          : <p className="motd-fallback">{status === undefined ? "正在读取服务器 MOTD…" : "Minecraft PvP"}</p>}
+        {status?.motd.length ? status.motd.map((line, i) => <MotdLine key={i} line={line} />)
+          : <p className="motd-fallback">{status === undefined ? "正在读取服务器 MOTD…" : "暂时无法读取服务器 MOTD"}</p>}
       </div>
       <div className="server-signal" role="status" aria-label={status === undefined ? "正在查询服务器" : stateText[state] + (count ? " " + count : "")}>
         <span className={"signal-bars " + (state === "online" ? "online" : "")} aria-hidden="true"><i /><i /><i /><i /><i /></span>
@@ -132,9 +133,9 @@ export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLa
   return <>
     <section className="server-home" aria-labelledby="server-title">
       <div className="server-intro">
-        <p className="hero-context">Minecraft Java Edition</p>
+        <p className="hero-context">1.7-1.8 Practice Server</p>
         {title}
-        <p className="server-description">{publicLaunch ? "加入 MiCet 练习对战、挑战排位。" : "练习对战，挑战排位，查看你在 MiCet 的每场战绩。"}</p>
+        {!publicLaunch && <p className="server-description">查看你在服务器的每场战绩。</p>}
         <div className="server-actions">
           <button className="btn primary" type="button" onClick={() => dialog.current?.showModal()}>Play Now</button>
           <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看游戏 Tag" : "查看战绩"}</a>

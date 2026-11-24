@@ -8,6 +8,7 @@ import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
 import { MatchDetailPage } from "./match-detail";
+import serverLogo from "./micet-logo.png?inline";
 import "./micet.css";
 
 type View = "home" | "stats" | "ranking" | "player" | "matches" | "match" | "shop" | "orders" | "account";
@@ -37,8 +38,13 @@ function parseRoute(publicLaunch: boolean, selfHosted: boolean): Route {
   return { view: "player", player: name };
 }
 
-function Avatar({ name }: { name: string }) {
-  return <span aria-hidden="true" className="avatar">{name.slice(0, 1).toUpperCase()}</span>;
+function Avatar({ name, uuid }: { name: string; uuid?: string }) {
+  const [failedUuid, setFailedUuid] = useState<string>();
+  const skin = uuid && uuid !== failedUuid && matchUuidPattern.test(uuid);
+  return <span aria-hidden="true" className="avatar">{skin
+    ? <img src={`https://mc-heads.net/avatar/${uuid}/48`} width={48} height={48} alt="" loading="lazy"
+      referrerPolicy="no-referrer" onError={() => setFailedUuid(uuid)} />
+    : name.slice(0, 1).toUpperCase()}</span>;
 }
 
 function HeroTitle({ home = false }: { home?: boolean }) {
@@ -128,7 +134,7 @@ function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: b
             <thead><tr><th scope="col">排名</th><th scope="col">玩家</th><th scope="col">Elo</th></tr></thead>
             <tbody>{board.entries.map((item, index) => <tr key={item.uuid}>
               <td className="rank">#{index + 1}</td>
-              <td><a className="player" href={"#player/" + item.player}><Avatar name={item.player} /><span>{item.player}</span></a></td>
+              <td><a className="player" href={"#player/" + item.player}><Avatar name={item.player} uuid={item.uuid} /><span>{item.player}</span></a></td>
               <td className="elo">{formatNumber(item.elo)}</td>
             </tr>)}</tbody>
           </table>}
@@ -160,7 +166,7 @@ function ProfilePage({ name, mode, selfHosted }: { name: string; mode: Mode; sel
       : profile === undefined ? <div className="panel"><Message>正在查找 {name}…</Message></div>
       : profile === null ? <div className="panel"><Message>找不到玩家 {name}。请核对游戏名后再试。</Message></div>
       : <>
-        <div className="panel stat-banner"><Avatar name={profile.player} /><div><p className="label">{mode === "demo" ? "示例玩家" : "MiCet 玩家"}</p><h2>{profile.player}</h2></div></div>
+        <div className="panel stat-banner"><Avatar name={profile.player} uuid={profile.uuid} /><div><p className="label">{mode === "demo" ? "示例玩家" : "MiCet 玩家"}</p><h2>{profile.player}</h2></div></div>
         {global && <div className="score-cards">
           {[["综合 Elo", formatNumber(global.elo)], ["胜场", formatNumber(global.wins)], ["败场", formatNumber(global.losses)], ["胜率", rate(global.wins, global.losses)]].map(([label, value]) =>
             <div className="panel score-card" key={label}><span className="label">{label}</span><strong>{value}</strong></div>)}
@@ -282,15 +288,13 @@ function ShopPage({ catalogOnly, linked, onOrder }: { catalogOnly: boolean; link
         <div><h2>标签列表</h2><p>共 {catalog.length} 个</p></div>
         {!catalogOnly && <a className="sub-link" href="#orders">查看订单</a>}
       </div>
-      <div className="cards">{catalog.map(item => {
-        const borderless = item.name.includes("Symbol") || item.name === "top";
-        return <article key={item.name} className="panel card">
+      <div className="cards">{catalog.map(item =>
+        <article key={item.name} className="panel card">
           <h3 className="catalog-tag-name">
-            <span className={`tag tag-${item.color}`}>{borderless ? item.prefix : `[${item.prefix}]`}</span>
+            <span className={`tag tag-${item.color}`}>[{item.prefix}]</span>
             {item.prefix !== item.name && <span className="catalog-tag-caption">{item.name}</span>}
           </h3>
-        </article>;
-      })}</div>
+        </article>)}</div>
     </div>
   </>;
 }
@@ -373,7 +377,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       main.current?.scrollIntoView();
     }}>跳到主要内容</a>
     <header className="site-header"><div className="shell top">
-      <a className="brand" href="#home" aria-label="MiCet.cc 首页"><span className="mark" aria-hidden="true" /><span>MiCet.cc</span></a>
+      <a className="brand" href="#home" aria-label="MiCet.cc 首页"><img src={serverLogo} className="brand-logo" width={32} height={32} alt="" /><span>MiCet.cc</span></a>
       <nav aria-label="站点导航">{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
         <a key={key} href={"#" + key} aria-current={view === key || (key === "stats" && view === "player") || (key === "matches" && view === "match") ? "page" : undefined}>{selfHosted && key === "shop" ? "游戏 Tag" : label}</a>)}</nav>
       {!publicLaunch && <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>}
@@ -384,7 +388,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       {view === "stats" && <>
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-meta">
-            <span className="hero-context">Minecraft PvP</span>
+            <span className="hero-context">Elo Lookup</span>
             {!selfHosted && <span className="env">{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span>}
           </div>
           <div className="hero-grid">
@@ -407,7 +411,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
     </main>
     <footer className="site-footer"><div className="shell footer-row">
-      <span><strong>MiCet.cc</strong> · Minecraft PvP</span>
+      <span><strong>MiCet.cc</strong> · 1.7-1.8 Practice Server</span>
       {!publicLaunch && !selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
     </div></footer>
   </>;

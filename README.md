@@ -34,7 +34,7 @@ For a public showcase on a VPS, use the public launch flag after building.
 npm start -- --port 8787 --var MICET_PUBLIC_LAUNCH:1
 ```
 
-This serves the homepage, live MOTD and the Tag catalog. It disables account, stats, bridge and checkout endpoints in the application. Point Cloudflare Tunnel at `http://127.0.0.1:8787`. The catalog is a snapshot of the AquaCore `Tags` collection and can be updated in `lib/micet-data.ts`.
+This serves the homepage, live MOTD and the Tag catalog. It disables account, stats, bridge and checkout endpoints in the application. Point Cloudflare Tunnel at `http://127.0.0.1:8787`. The public Tag selection is in `lib/micet-data.ts`.
 
 ### Self-hosted Practice stats and account binding
 
@@ -43,6 +43,14 @@ Start with a separate checkout, local D1 state and HTTPS hostname for staging. B
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_website_binding.sql
 ```
+
+On an existing VPS, use the same config and `--persist-to` path as the running website. If stats work but generating a code fails, check whether the binding tables exist in that database before applying `0001`.
+
+```sh
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --command "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('bridge_jobs','web_link_challenges','web_sessions') ORDER BY name"
+```
+
+If the output contains `bridge_jobs` and neither binding table, apply `0001` using the previous command. If both binding tables exist, the binding migration has already been applied.
 
 Keep a private copy of these settings outside the checkout. After each build, install it as `dist/server/.dev.vars` with file mode `0600`, then run `npm start -- --port 8788`. Use a fresh random secret of at least 32 characters.
 
@@ -59,7 +67,7 @@ Point the staging hostname's Tunnel route at `http://127.0.0.1:8788`. Allow thes
 | GET | `/api/micet/server-status`, `/api/micet/leaderboard`, `/api/micet/player`, `/api/micet/status`, `/api/micet/result` |
 | POST | `/api/micet/code`, `/api/micet/confirm`, `/api/micet/logout`, `/api/micet/stats`, `/api/bridge/link`, `/api/bridge/poll`, `/api/bridge/receipt` |
 
-Install MicetSiteBridge 0.3.0 on the Bukkit Practice backend with MicetPvP and AquaCore. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website.
+Install MicetSiteBridge 0.3.1 on the Bukkit Practice backend with MicetPvP and AquaCore. Its Elo leaderboard uses the same ranked and hidden kit flags as the public in-game queue menu. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website.
 
 ```yaml
 enabled: true

@@ -368,6 +368,11 @@ export async function micetApi(request: Request, area: string, action: string) {
       : await browserGet(db, action, request, owner, mode);
   } catch (error) {
     if (error instanceof RequestError) return json({ error: error.message }, error.status);
+    if (error instanceof Error && [error, error.cause].some(detail => detail instanceof Error &&
+        /\bno such table:\s*(?:main\.)?web_(?:link_challenges|sessions)\b/i.test(detail.message))) {
+      console.error("MiCet account binding tables are missing. Apply drizzle/0001_website_binding.sql to the running D1 database.");
+      return json({ error: "账号绑定的数据库尚未初始化，请联系服务器管理员。" }, 503);
+    }
     console.error("Micet request error", area, action, error instanceof Error ? error.name : "unknown");
     return json({ error: "站点暂时无法处理请求，请稍后再试。" }, 500);
   }

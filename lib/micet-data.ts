@@ -11,18 +11,10 @@ export const TEST_SKU = "micet-test";
 export const DEMO_PLAYER = "KairoPvP";
 export const testTag = { tag: "MICET TEST", name: "测试标签", description: "用于验证站内结账和游戏内 Tag 发放。" };
 
-// AquaCore Tags snapshot, ordered by game menu weight (highest first).
+// AquaCore Tags currently offered to the public.
 export const catalog = [
-  { name: "Parkour", prefix: "Parkour", color: "dark-gray" },
   { name: "Vape", prefix: "Vape", color: "red" },
-  { name: "Vip", prefix: "Vip", color: "dark-green" },
   { name: "Heart", prefix: "❤", color: "dark-red" },
-  { name: "Symbol#1", prefix: "❖", color: "red" },
-  { name: "Symbol#2", prefix: "☠", color: "red" },
-  { name: "Symbol#3", prefix: "☀", color: "red" },
-  { name: "Symbol#4", prefix: "♚", color: "red" },
-  { name: "Symbol#5", prefix: "✖", color: "red" },
-  { name: "top", prefix: "〄", color: "dark-red" },
 ] as const;
 
 const kits = [
