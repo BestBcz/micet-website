@@ -3,6 +3,8 @@ import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { demoMatchPattern, getDemoMatchDetail, matchUuidPattern } from "./micet-match-detail";
 import { getServerStatus } from "./micet-server-status";
 import { DEMO_PLAYER, TEST_SKU, demoBoards, getDemoMatches, getDemoProfile, type Link, type Mode, type Order } from "./micet-data";
+import { codeLifetime, codePattern, digest, generateCode, hashCode, json, RequestError } from "./micet-http";
+import { approveSiteLink, confirmSiteLink, endSiteSession, siteSession, startSiteLink } from "./micet-session";
 
 type Body = Record<string, unknown>;
 type Job = {
@@ -13,16 +15,17 @@ type Job = {
 const playerPattern = /^[A-Za-z0-9_]{1,16}$/;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const jobKinds = ["boards", "profile", "matches", "match-detail"];
-const codeLifetime = 5 * 60_000;
 const queryLifetime = 45_000;
 const leaseLifetime = 20_000;
+const publicOwner = "public-stats";
+const minecraftOwner = "minecraft:";
 
-class RequestError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+export function isSelfHosted(): boolean {
+  return env.MICET_SELF_HOSTED === "1";
 }
 
 export function micetMode(): Mode {
-  return env.MICET_MODE === "bridge" ? "bridge" : "demo";
+  return isSelfHosted() || env.MICET_MODE === "bridge" ? "bridge" : "demo";
 }
 
 export function isPublicLaunch(): boolean {
@@ -33,11 +36,6 @@ function database(): D1Database {
   if (!env.DB) throw new RequestError(503, "站点数据库暂不可用。");
   return env.DB;
 }
-
-const json = (body: unknown, status = 200) => Response.json(body, {
-  status,
-  headers: { "Cache-Control": "no-store" },
-});
 
 async function ownerId(request: Request) {
   const user = await getChatGPTUser();
@@ -77,14 +75,6 @@ function stringField(body: Body, key: string) {
   return typeof body[key] === "string" ? body[key].trim() : "";
 }
 
-async function digest(value: string) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
-}
-
-async function hashCode(code: string) {
-  return Array.from(await digest(code.toUpperCase()), c => c.toString(16).padStart(2, "0")).join("");
-}
-
 async function requireBridge(request: Request) {
   const configured = env.MICET_BRIDGE_SECRET;
   const supplied = request.headers.get("X-Micet-Bridge") ?? "";
@@ -103,12 +93,14 @@ function playerLink(db: D1Database, owner: string, mode: Mode) {
 
 async function linkStatus(db: D1Database, mode: Mode) {
   if (mode === "demo") return true;
-  const row = await db.prepare("SELECT seen_at FROM bridge_state WHERE id='game'").first<{ seen_at: number }>();
+  const row = await db.prepare("SELECT seen_at FROM bridge_state WHERE id=?").bind(bridgeId()).first<{ seen_at: number }>();
   return Boolean(row && row.seen_at > Date.now() - 35_000);
 }
 
+const bridgeId = () => isSelfHosted() ? "self-hosted-game" : "game";
+
 async function consumeCode(db: D1Database, code: string, mode: Mode, link: Link, owner?: string) {
-  if (!/^[A-Z2-9]{10}$/i.test(code)) throw new RequestError(400, "验证码格式有误。");
+  if (!codePattern.test(code)) throw new RequestError(400, "验证码格式有误。");
   const hash = await hashCode(code);
   const now = Date.now();
   const source = "hash=? AND mode=? AND expires_at>? AND (? IS NULL OR owner=?)";
@@ -127,7 +119,7 @@ async function consumeCode(db: D1Database, code: string, mode: Mode, link: Link,
   }
 }
 
-async function browserGet(db: D1Database, action: string, request: Request, owner: string, mode: Mode) {
+async function browserGet(db: D1Database, action: string, request: Request, owner: string, mode: Mode, verifiedLink?: Link) {
   if (action === "status") {
     const [linked, connected] = await Promise.all([playerLink(db, owner, mode), linkStatus(db, mode)]);
     return json({ mode, linked, connected });
@@ -143,7 +135,7 @@ async function browserGet(db: D1Database, action: string, request: Request, owne
       .bind(id, owner, mode, Date.now()).first<Pick<Job, "kind" | "payload" | "status" | "result">>();
     if (!job) throw new RequestError(404, "查询已过期，请重新尝试。");
     if (job.kind === "match-detail" || job.kind === "matches") {
-      const linked = await playerLink(db, owner, mode);
+      const linked = verifiedLink ?? await playerLink(db, owner, mode);
       if (linked?.uuid !== JSON.parse(job.payload).uuid) throw new RequestError(404, "查询已过期，请重新尝试。");
     }
     return json({ status: job.status, data: job.result ? JSON.parse(job.result) : null });
@@ -151,7 +143,7 @@ async function browserGet(db: D1Database, action: string, request: Request, owne
   throw new RequestError(404, "找不到页面。");
 }
 
-async function stats(db: D1Database, body: Body, owner: string, mode: Mode) {
+async function stats(db: D1Database, body: Body, owner: string, mode: Mode, verifiedLink?: Link) {
   const kind = stringField(body, "kind");
   if (!jobKinds.includes(kind)) throw new RequestError(400, "无效的查询类型。");
   const name = stringField(body, "name");
@@ -165,14 +157,14 @@ async function stats(db: D1Database, body: Body, owner: string, mode: Mode) {
     }
   }
   const needsPlayer = kind === "matches" || kind === "match-detail";
-  const link = needsPlayer ? await playerLink(db, owner, mode) : null;
+  const link = needsPlayer ? verifiedLink ?? await playerLink(db, owner, mode) : null;
   if (needsPlayer && !link) throw new RequestError(403, "绑定游戏账号后即可查看对局。");
   if (mode === "demo") {
     if (kind === "match-detail") return json({ data: getDemoMatchDetail(link!.uuid, matchId, target) });
     const data = kind === "boards" ? demoBoards : kind === "profile" ? getDemoProfile(name) : getDemoMatches(link!.uuid);
     return json({ data });
   }
-  if (!await linkStatus(db, mode)) throw new RequestError(503, "测试服桥接离线，请稍后再试。");
+  if (!await linkStatus(db, mode)) throw new RequestError(503, "游戏服桥接离线，请稍后再试。");
   const now = Date.now();
   await db.prepare("DELETE FROM bridge_jobs WHERE expires_at IS NOT NULL AND expires_at<=?").bind(now).run();
   const pending = await db.prepare("SELECT COUNT(*) AS count FROM bridge_jobs WHERE owner=? AND expires_at>? AND status IN ('queued','leased')")
@@ -183,6 +175,59 @@ async function stats(db: D1Database, body: Body, owner: string, mode: Mode) {
   await db.prepare("INSERT INTO bridge_jobs (id,owner,kind,mode,payload,status,created_at,expires_at) VALUES (?,?,?,?,?,'queued',?,?)")
     .bind(id, owner, kind, mode, payload, now, now + queryLifetime).run();
   return json({ pending: id }, 202);
+}
+
+async function publicStats(db: D1Database, request: Request, kind: "boards" | "profile") {
+  const name = (new URL(request.url).searchParams.get("name") ?? "").trim();
+  if (kind === "profile" && !playerPattern.test(name)) throw new RequestError(400, "请输入有效的 Minecraft 玩家名。");
+  const id = "public:" + (kind === "boards" ? kind : "profile:" + name.toLowerCase());
+  const now = Date.now();
+  const getJob = () => db.prepare("SELECT status,result FROM bridge_jobs WHERE id=? AND owner=? AND expires_at>?")
+    .bind(id, publicOwner, now).first<Pick<Job, "status" | "result">>();
+  let job = await getJob();
+  if (!job) {
+    if (!await linkStatus(db, "bridge")) throw new RequestError(503, "游戏服桥接离线，请稍后再试。");
+    await db.prepare("INSERT INTO bridge_jobs (id,owner,kind,mode,payload,status,created_at,expires_at) "
+      + "SELECT ?,?,?,'bridge',?,'queued',?,? WHERE "
+      + "(SELECT COUNT(*) FROM bridge_jobs WHERE owner=? AND expires_at>? AND status IN ('queued','leased'))<8 "
+      + "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload,status='queued',created_at=excluded.created_at,"
+      + "expires_at=excluded.expires_at,lease=NULL,lease_until=NULL,result=NULL WHERE bridge_jobs.expires_at<=excluded.created_at")
+      .bind(id, publicOwner, kind, JSON.stringify({ name }), now, now + queryLifetime, publicOwner, now).run();
+    job = await getJob();
+  }
+  if (!job) throw new RequestError(429, "查询繁忙，请稍后再试。");
+  if (job.status === "failed") throw new RequestError(503, "游戏服暂时无法返回这项数据。");
+  if (job.status !== "done") return json({ pending: true }, 202);
+  return json({ data: job.result ? JSON.parse(job.result) : null });
+}
+
+async function selfHostedBrowser(db: D1Database, request: Request, action: string) {
+  if (request.method !== "POST") {
+    if (action === "leaderboard") return publicStats(db, request, "boards");
+    if (action === "player") return publicStats(db, request, "profile");
+    if (!["status", "result"].includes(action)) throw new RequestError(404, "找不到页面。");
+    const linked = await siteSession(db, request);
+    if (action === "status") return json({ mode: "bridge", linked, connected: await linkStatus(db, "bridge") });
+    if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
+    return browserGet(db, action, request, minecraftOwner + linked.uuid, "bridge", linked);
+  }
+  const origin = env.MICET_SITE_ORIGIN?.trim();
+  if (!origin?.startsWith("https://") || request.headers.get("origin") !== origin) {
+    throw new RequestError(403, "请求来源无效。");
+  }
+  const body = await readBody(request);
+  if (action === "code") {
+    if (!await linkStatus(db, "bridge")) throw new RequestError(503, "游戏服桥接离线，请稍后再试。");
+    return startSiteLink(db, request);
+  }
+  if (action === "confirm") return confirmSiteLink(db, request);
+  if (action === "logout") return endSiteSession(db, request);
+  if (action !== "stats" || !["matches", "match-detail"].includes(stringField(body, "kind"))) {
+    throw new RequestError(404, "找不到页面。");
+  }
+  const linked = await siteSession(db, request);
+  if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
+  return stats(db, body, minecraftOwner + linked.uuid, "bridge", linked);
 }
 
 async function orderAction(db: D1Database, action: string, body: Body, owner: string, mode: Mode) {
@@ -229,8 +274,7 @@ async function orderAction(db: D1Database, action: string, body: Body, owner: st
 
 async function browserPost(db: D1Database, action: string, body: Body, owner: string, mode: Mode) {
   if (action === "code") {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    const code = Array.from(crypto.getRandomValues(new Uint8Array(10)), value => alphabet[value & 31]).join("");
+    const code = generateCode();
     const expiresAt = Date.now() + codeLifetime;
     await db.prepare("INSERT INTO link_codes (hash,owner,mode,expires_at) VALUES (?,?,?,?) "
       + "ON CONFLICT(owner,mode) DO UPDATE SET hash=excluded.hash,expires_at=excluded.expires_at")
@@ -252,18 +296,22 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
     const uuid = stringField(body, "uuid");
     const player = stringField(body, "player");
     if (!uuidPattern.test(uuid) || !playerPattern.test(player)) throw new RequestError(400, "游戏账号无效。");
-    await consumeCode(db, stringField(body, "code"), "bridge", { uuid: uuid.toLowerCase(), player });
+    const link = { uuid: uuid.toLowerCase(), player };
+    const code = stringField(body, "code");
+    if (isSelfHosted()) await approveSiteLink(db, code, link);
+    else await consumeCode(db, code, "bridge", link);
     return json({ ok: true });
   }
   if (action === "poll") {
     const lease = crypto.randomUUID();
     const [, , result] = await db.batch<Job>([
-      db.prepare("INSERT INTO bridge_state (id,seen_at) VALUES ('game',?) ON CONFLICT(id) DO UPDATE SET seen_at=excluded.seen_at").bind(now),
+      db.prepare("INSERT INTO bridge_state (id,seen_at) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET seen_at=excluded.seen_at").bind(bridgeId(), now),
       db.prepare("DELETE FROM bridge_jobs WHERE expires_at IS NOT NULL AND expires_at<=?").bind(now),
       db.prepare("UPDATE bridge_jobs SET status='leased',lease=?,lease_until=? WHERE id=(SELECT id FROM bridge_jobs WHERE mode='bridge' "
         + "AND (status='queued' OR (status='leased' AND lease_until<=?)) AND (expires_at IS NULL OR expires_at>?) "
+        + "AND ((owner=? OR owner LIKE ?) = ?) AND (?=0 OR kind!='delivery') "
         + "ORDER BY CASE WHEN kind='delivery' THEN 0 ELSE 1 END, created_at LIMIT 1) RETURNING *")
-        .bind(lease, now + leaseLifetime, now, now),
+        .bind(lease, now + leaseLifetime, now, now, publicOwner, minecraftOwner + "%", Number(isSelfHosted()), Number(isSelfHosted())),
     ]);
     const job = result.results[0];
     return json({ job: job ? { id: job.id, kind: job.kind, lease: job.lease, payload: JSON.parse(job.payload) } : null });
@@ -272,14 +320,16 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
     const id = stringField(body, "id");
     const lease = stringField(body, "lease");
     const job = await db.prepare("SELECT * FROM bridge_jobs WHERE id=? AND mode='bridge' AND lease=?").bind(id, lease).first<Job>();
-    if (!job || job.status !== "leased") return json({ ignored: true });
+    if (!job || job.status !== "leased" || isSelfHosted() !== (job.owner === publicOwner || job.owner.startsWith(minecraftOwner))
+        || (isSelfHosted() && job.kind === "delivery")) return json({ ignored: true });
     const outcome = stringField(body, "outcome");
     if (!["ok", "retry", "failed"].includes(outcome)) throw new RequestError(400, "回执状态无效。");
     if (outcome === "retry") return json({ ok: true });
     const data = outcome === "ok" ? body.data ?? null : null;
     const status = outcome === "ok" ? "done" : "failed";
-    const complete = db.prepare("UPDATE bridge_jobs SET status=?,result=? WHERE id=? AND lease=? AND status='leased'")
-      .bind(status, JSON.stringify(data), id, lease);
+    const expiry = job.owner === publicOwner ? now + (outcome === "failed" ? 5000 : job.kind === "boards" ? 60_000 : 30_000) : job.expires_at;
+    const complete = db.prepare("UPDATE bridge_jobs SET status=?,result=?,expires_at=? WHERE id=? AND lease=? AND status='leased'")
+      .bind(status, JSON.stringify(data), expiry, id, lease);
     if (job.kind === "delivery") {
       await db.batch([
         db.prepare("UPDATE micet_orders SET status=?,detail=?,updated_at=? WHERE id=? AND status='paid' AND mode='bridge' "
@@ -301,12 +351,13 @@ export async function micetApi(request: Request, area: string, action: string) {
       return json(await getServerStatus(env.MICET_STATUS_URL));
     }
     if (isPublicLaunch()) throw new RequestError(404, "该功能暂未开放。");
-    const body = request.method === "POST" ? await readBody(request) : null;
-    if (area === "bridge" && body) {
+    if (area === "bridge" && request.method === "POST") {
       await requireBridge(request);
-      return await bridgePost(database(), action, body);
+      return await bridgePost(database(), action, await readBody(request));
     }
     if (area !== "micet") throw new RequestError(404, "找不到页面。");
+    if (isSelfHosted()) return await selfHostedBrowser(database(), request, action);
+    const body = request.method === "POST" ? await readBody(request) : null;
     const owner = await ownerId(request);
     if (body && request.headers.get("origin") !== new URL(request.url).origin) {
       throw new RequestError(403, "请求来源无效。");

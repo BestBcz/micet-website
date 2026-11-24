@@ -36,6 +36,45 @@ npm start -- --port 8787 --var MICET_PUBLIC_LAUNCH:1
 
 This serves the homepage, live MOTD and the Tag catalog. It disables account, stats, bridge and checkout endpoints in the application. Point Cloudflare Tunnel at `http://127.0.0.1:8787`. The catalog is a snapshot of the AquaCore `Tags` collection and can be updated in `lib/micet-data.ts`.
 
+### Self-hosted Practice stats and account binding
+
+Start with a separate checkout, local D1 state and HTTPS hostname for staging. Build with Node 24 using `npm run build`. Apply `0000_workable_the_leader.sql` once for a fresh database, then apply the binding migration once.
+
+```sh
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_website_binding.sql
+```
+
+Keep a private copy of these settings outside the checkout. After each build, install it as `dist/server/.dev.vars` with file mode `0600`, then run `npm start -- --port 8788`. Use a fresh random secret of at least 32 characters.
+
+```dotenv
+MICET_SELF_HOSTED=1
+MICET_SITE_ORIGIN=https://staging.micet.cc.cd
+MICET_BRIDGE_SECRET=<shared bridge secret>
+```
+
+Point the staging hostname's Tunnel route at `http://127.0.0.1:8788`. Allow these exact paths and methods in the Cloudflare rule for that hostname alongside the existing page and static assets.
+
+| Method | Paths |
+| --- | --- |
+| GET | `/api/micet/server-status`, `/api/micet/leaderboard`, `/api/micet/player`, `/api/micet/status`, `/api/micet/result` |
+| POST | `/api/micet/code`, `/api/micet/confirm`, `/api/micet/logout`, `/api/micet/stats`, `/api/bridge/link`, `/api/bridge/poll`, `/api/bridge/receipt` |
+
+Install MicetSiteBridge 0.3.0 on the Bukkit Practice backend with MicetPvP and AquaCore. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website.
+
+```yaml
+enabled: true
+self-hosted: true
+site-url: "https://staging.micet.cc.cd"
+bridge-secret: "<shared bridge secret>"
+trust-forwarded-identity: false
+```
+
+For offline-mode Bukkit backends, enable `trust-forwarded-identity` only after confirming the backend is reachable exclusively through a proxy that authenticates every player and forwards their verified UUID.
+
+Compare two players' Elo and wins with the in-game leaderboard. Generate a code on the site, run `/micetlink <code>` in Practice, then select **完成绑定** in the originating browser. Verify that a second account cannot read the first account's match. Public rankings and profiles use live bridge data with a short cache. The self-hosted mode disables checkout and delivery.
+
+After building, run `node --test tests/self-hosted.mjs`. It starts an isolated local Worker, applies both migrations and simulates game bridge requests.
+
 The production build targets a Sites-hosted Worker with a D1 `DB` binding. Register your own Sites project when deploying this checkout and store configuration values as runtime variables.
 
 Sites provides verified visitor identity at its gateway. If deploying outside Sites, use an authenticated gateway that strips incoming identity headers and injects its own, or replace the identity adapter before exposing account and order routes. Keep `MICET_LOCAL_TEST` limited to local previews.

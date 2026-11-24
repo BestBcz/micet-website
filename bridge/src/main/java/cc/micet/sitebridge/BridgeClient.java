@@ -15,18 +15,18 @@ final class BridgeClient {
     private final String bridgeSecret;
     private final String siteToken;
 
-    BridgeClient(String url, String bridgeSecret, String siteToken) {
+    BridgeClient(String url, String bridgeSecret, String siteToken, boolean selfHosted) {
         origin = URI.create(url);
         String path = origin.getPath();
         if (!"https".equals(origin.getScheme()) || origin.getHost() == null || origin.getUserInfo() != null
                 || origin.getQuery() != null || origin.getFragment() != null || !(path.isEmpty() || path.equals("/"))) {
-            throw new IllegalArgumentException("site-url must be the HTTPS origin of the private Site.");
+            throw new IllegalArgumentException("site-url must be the HTTPS origin of the website.");
         }
-        if (bridgeSecret.length() < 32 || siteToken.isEmpty()) {
-            throw new IllegalArgumentException("Configure the bridge secret and Site service token.");
+        if (bridgeSecret.length() < 32 || bridgeSecret.length() > 256 || (!selfHosted && siteToken.isEmpty())) {
+            throw new IllegalArgumentException("Configure the bridge secret and, for Sites, the Site service token.");
         }
         this.bridgeSecret = bridgeSecret;
-        this.siteToken = siteToken;
+        this.siteToken = selfHosted ? "" : siteToken;
     }
 
     JsonObject post(String action, JsonObject body) throws IOException {
@@ -37,7 +37,7 @@ final class BridgeClient {
         connection.setRequestMethod("POST");
         connection.setRequestProperty("Content-Type", "application/json");
         connection.setRequestProperty("X-Micet-Bridge", bridgeSecret);
-        connection.setRequestProperty("OAI-Sites-Authorization", "Bearer " + siteToken);
+        if (!siteToken.isEmpty()) connection.setRequestProperty("OAI-Sites-Authorization", "Bearer " + siteToken);
         connection.setDoOutput(true);
         byte[] request = body.toString().getBytes(StandardCharsets.UTF_8);
         connection.setFixedLengthStreamingMode(request.length);

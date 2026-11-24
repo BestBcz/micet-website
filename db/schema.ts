@@ -51,3 +51,23 @@ export const bridgeState = sqliteTable("bridge_state", {
   id: text().primaryKey(),
   seen_at: integer().notNull(),
 });
+
+export const webLinkChallenges = sqliteTable("web_link_challenges", {
+  code_hash: text().primaryKey(),
+  browser_hash: text().notNull(),
+  address_hash: text(),
+  uuid: text(),
+  player: text(),
+  expires_at: integer().notNull(),
+}, table => [
+  uniqueIndex("web_link_browser").on(table.browser_hash),
+  index("web_link_address").on(table.address_hash),
+  index("web_link_expiry").on(table.expires_at),
+]);
+
+export const webSessions = sqliteTable("web_sessions", {
+  hash: text().primaryKey(),
+  uuid: text().notNull(),
+  player: text().notNull(),
+  expires_at: integer().notNull(),
+}, table => [index("web_session_expiry").on(table.expires_at)]);

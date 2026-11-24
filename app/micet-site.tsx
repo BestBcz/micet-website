@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent,
 import {
   DEMO_PLAYER, TEST_SKU, catalog, demoBoards, testTag, type Board, type Link, type Match, type Mode, type Order, type Profile,
 } from "@/lib/micet-data";
-import { api, readStats } from "@/lib/micet-client";
+import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
 import { MatchDetailPage } from "./match-detail";
@@ -23,9 +23,10 @@ const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 }).format(value);
 
-function parseRoute(publicLaunch: boolean): Route {
+function parseRoute(publicLaunch: boolean, selfHosted: boolean): Route {
   const [raw, name] = window.location.hash.slice(1).split("/");
   if (publicLaunch) return { view: raw === "shop" ? "shop" : "home" };
+  if (selfHosted && raw === "orders") return { view: "shop" };
   if (!views.includes(raw as View)) return { view: "home" };
   if (raw === "match") {
     return name && (demoMatchPattern.test(name) || matchUuidPattern.test(name))
@@ -101,7 +102,7 @@ function Message({ children, error = false }: { children: ReactNode; error?: boo
   return <p className={"message" + (error ? " error" : "")} role={error ? "alert" : "status"}>{children}</p>;
 }
 
-function Ranking({ mode, side = false }: { mode: Mode; side?: boolean }) {
+function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: boolean; side?: boolean }) {
   const [boards, setBoards] = useState<Board[]>(mode === "demo" ? demoBoards : []);
   const [selected, setSelected] = useState("global");
   const [error, setError] = useState("");
@@ -109,12 +110,13 @@ function Ranking({ mode, side = false }: { mode: Mode; side?: boolean }) {
   useEffect(() => {
     if (mode === "demo") return;
     const stop = new AbortController();
-    readStats<Board[]>("boards", stop.signal).then(setBoards).catch(err => { if (!stop.signal.aborted) setError(err.message); });
+    const load = selfHosted ? readPublicStats<Board[]>("leaderboard", stop.signal) : readStats<Board[]>("boards", stop.signal);
+    load.then(setBoards).catch(err => { if (!stop.signal.aborted) setError(err.message); });
     return () => stop.abort();
-  }, [mode, retry]);
+  }, [mode, retry, selfHosted]);
   const board = boards.find(item => item.id === selected) ?? boards[0];
   return <section className="section" aria-label={side ? undefined : "Elo 排行榜"} aria-labelledby={side ? "rank-heading" : undefined}>
-    {side && <div className="section-title"><div><h2 id="rank-heading">Elo 排行榜</h2><p>按玩法查看 MiCet 排位高手。</p></div><span className="note">{mode === "demo" ? "示例排名" : "测试服"}</span></div>}
+    {side && <div className="section-title"><div><h2 id="rank-heading">Elo 排行榜</h2><p>按玩法查看 MiCet 排位高手。</p></div>{!selfHosted && <span className="note">{mode === "demo" ? "示例排名" : "测试服"}</span>}</div>}
     <div className={side ? "score-layout" : ""}>
       <div className="panel">
         {boards.length > 0 && <div className="pills" aria-label="玩法">{boards.map(item =>
@@ -133,21 +135,23 @@ function Ranking({ mode, side = false }: { mode: Mode; side?: boolean }) {
       </div>
       {side && <aside className="side">
         <div className="panel side-panel"><h3>我的对局</h3><p>绑定 Minecraft 账号，查看最近比赛和 Elo 变化。</p><a href="#matches">查看对局</a></div>
-        <div className="panel side-panel"><h3>游戏内 Tag</h3><p>浏览装饰标签，体验站内测试结账。</p><a href="#shop">浏览商店</a></div>
+        <div className="panel side-panel"><h3>游戏内 Tag</h3><p>{selfHosted ? "查看 MiCet 游戏内标签。" : "浏览装饰标签，体验站内测试结账。"}</p><a href="#shop">{selfHosted ? "查看标签" : "浏览商店"}</a></div>
       </aside>}
     </div>
   </section>;
 }
 
-function ProfilePage({ name, mode }: { name: string; mode: Mode }) {
+function ProfilePage({ name, mode, selfHosted }: { name: string; mode: Mode; selfHosted: boolean }) {
   const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     const stop = new AbortController();
-    readStats<Profile | null>("profile", stop.signal, { name }).then(setProfile).catch(err => { if (!stop.signal.aborted) setError(err.message); });
+    const load = selfHosted ? readPublicStats<Profile | null>("player?name=" + encodeURIComponent(name), stop.signal)
+      : readStats<Profile | null>("profile", stop.signal, { name });
+    load.then(setProfile).catch(err => { if (!stop.signal.aborted) setError(err.message); });
     return () => stop.abort();
-  }, [name, retry]);
+  }, [name, retry, selfHosted]);
   const global = profile?.scores.find(score => score.id === "global");
   const rate = (wins: number, losses: number) => wins + losses > 0 ? Math.round(wins / (wins + losses) * 100) + "%" : "—";
   return <>
@@ -201,7 +205,7 @@ function MatchesPage({ linked }: { linked: Link | null | undefined }) {
   </>;
 }
 
-function AccountPage({ mode, linked, connected, onRefresh }: { mode: Mode; linked?: Link | null; connected?: boolean; onRefresh: () => Promise<void> }) {
+function AccountPage({ mode, selfHosted, linked, connected, onRefresh }: { mode: Mode; selfHosted: boolean; linked?: Link | null; connected?: boolean; onRefresh: () => Promise<void> }) {
   const [code, setCode] = useState<Code>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -218,31 +222,43 @@ function AccountPage({ mode, linked, connected, onRefresh }: { mode: Mode; linke
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
-  const checkBinding = async () => {
+  async function checkBinding() {
     setBusy(true); setError("");
-    try { await onRefresh(); } catch (err) { setError((err as Error).message); }
+    try {
+      if (selfHosted) await api("confirm", {});
+      await onRefresh();
+      setCode(undefined);
+    } catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
-  };
+  }
+  async function logout() {
+    setBusy(true); setError("");
+    try { await api("logout", {}); await onRefresh(); setCode(undefined); }
+    catch (err) { setError((err as Error).message); }
+    finally { setBusy(false); }
+  }
   return <>
-    <PageIntro name="绑定游戏账号"><p>用 Minecraft 账号确认对局和 Tag 发放的接收人。</p></PageIntro>
+    <PageIntro name="绑定游戏账号"><p>{selfHosted ? "验证你的 Minecraft 账号，访问个人对局。" : "用 Minecraft 账号确认对局和 Tag 发放的接收人。"}</p></PageIntro>
     <div className="panel card vstack">
-      {linked ? <><p><strong>{linked.player}</strong> · 已绑定{mode === "demo" ? "（示例账号）" : ""}</p><a className="btn primary" href="#matches">查看我的对局</a></>
+      {linked ? <><p><strong>{linked.player}</strong> · 已绑定{mode === "demo" ? "（示例账号）" : ""}</p><a className="btn primary" href="#matches">查看我的对局</a>
+        {selfHosted && <button className="btn" disabled={busy} onClick={logout}>退出当前浏览器</button>}</>
         : <>
-          {mode === "bridge" && connected === false && <p>测试服桥接离线。恢复连接后可在游戏内输入绑定指令。</p>}
-          <button className="btn primary" disabled={busy || linked === undefined} onClick={issue}>{code ? "重新生成验证码" : "生成一次性验证码"}</button>
+          {mode === "bridge" && connected === false && <p>游戏服桥接离线。恢复连接后可在游戏内输入绑定指令。</p>}
+          <button className="btn primary" disabled={busy || linked === undefined || (selfHosted && connected === false)} onClick={issue}>{code ? "重新生成验证码" : "生成一次性验证码"}</button>
           {code && <div className="vstack">
-            <p>请在{mode === "demo" ? "示例" : "测试"}服输入，验证码 5 分钟内有效。</p>
+            <p>{selfHosted ? "请在 MiCet Practice 服输入本页生成的验证码。验证码 5 分钟内有效。" : `请在${mode === "demo" ? "示例" : "测试"}服输入，验证码 5 分钟内有效。`}</p>
             <code className="code">/micetlink {code.code}</code>
             {mode === "demo" ? <button className="btn" disabled={busy} onClick={verifyDemo}>模拟游戏内验证</button>
-              : <button className="btn" disabled={busy} onClick={checkBinding}>检查绑定结果</button>}
+              : !selfHosted && <button className="btn" disabled={busy} onClick={checkBinding}>检查绑定结果</button>}
           </div>}
+          {selfHosted && linked === null && <button className="btn" disabled={busy} onClick={checkBinding}>完成绑定</button>}
         </>}
       {error && <p role="alert" className="inline-error">{error}</p>}
     </div>
   </>;
 }
 
-function ShopPage({ publicLaunch, linked, onOrder }: { publicLaunch: boolean; linked?: Link | null; onOrder: (id: string) => void }) {
+function ShopPage({ catalogOnly, linked, onOrder }: { catalogOnly: boolean; linked?: Link | null; onOrder: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function checkout() {
@@ -252,8 +268,8 @@ function ShopPage({ publicLaunch, linked, onOrder }: { publicLaunch: boolean; li
     finally { setBusy(false); }
   }
   return <>
-    <PageIntro name={publicLaunch ? "游戏 Tag" : "Tag 商店"}><p>查看 MiCet 游戏内标签。站内购买筹备中。</p></PageIntro>
-    {!publicLaunch && <>
+    <PageIntro name={catalogOnly ? "游戏 Tag" : "Tag 商店"}><p>查看 MiCet 游戏内标签。站内购买筹备中。</p></PageIntro>
+    {!catalogOnly && <>
       <section className="panel feature" aria-label="测试商品">
         <div><span className="tag tag-test">[{testTag.tag}]</span><h2>{testTag.name}</h2><p>{testTag.description} 本次测试无需付款。</p></div>
         {linked === null ? <a className="btn primary" href="#account">绑定账号后结账</a>
@@ -264,7 +280,7 @@ function ShopPage({ publicLaunch, linked, onOrder }: { publicLaunch: boolean; li
     <div className="section">
       <div className="section-title">
         <div><h2>标签列表</h2><p>共 {catalog.length} 个</p></div>
-        {!publicLaunch && <a className="sub-link" href="#orders">查看订单</a>}
+        {!catalogOnly && <a className="sub-link" href="#orders">查看订单</a>}
       </div>
       <div className="cards">{catalog.map(item => {
         const borderless = item.name.includes("Symbol") || item.name === "top";
@@ -323,7 +339,7 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
   </>;
 }
 
-export function MicetSite({ mode, publicLaunch }: { mode: Mode; publicLaunch: boolean }) {
+export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publicLaunch: boolean; selfHosted: boolean }) {
   const [route, setRoute] = useState<Route>({ view: "home" });
   const [status, setStatus] = useState<SiteStatus>();
   const [statusError, setStatusError] = useState("");
@@ -334,12 +350,12 @@ export function MicetSite({ mode, publicLaunch }: { mode: Mode; publicLaunch: bo
     catch (err) { setStatusError((err as Error).message); throw err; }
   }
   useEffect(() => {
-    const update = () => { setRoute(parseRoute(publicLaunch)); window.scrollTo(0, 0); };
+    const update = () => { setRoute(parseRoute(publicLaunch, selfHosted)); window.scrollTo(0, 0); };
     const navigate = () => { update(); main.current?.focus({ preventScroll: true }); };
     update();
     window.addEventListener("hashchange", navigate);
     return () => window.removeEventListener("hashchange", navigate);
-  }, [publicLaunch]);
+  }, [publicLaunch, selfHosted]);
   useEffect(() => {
     if (publicLaunch) return;
     const stop = new AbortController();
@@ -359,7 +375,7 @@ export function MicetSite({ mode, publicLaunch }: { mode: Mode; publicLaunch: bo
     <header className="site-header"><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><span className="mark" aria-hidden="true" /><span>MiCet.cc</span></a>
       <nav aria-label="站点导航">{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
-        <a key={key} href={"#" + key} aria-current={view === key || (key === "stats" && view === "player") || (key === "matches" && view === "match") ? "page" : undefined}>{label}</a>)}</nav>
+        <a key={key} href={"#" + key} aria-current={view === key || (key === "stats" && view === "player") || (key === "matches" && view === "match") ? "page" : undefined}>{selfHosted && key === "shop" ? "游戏 Tag" : label}</a>)}</nav>
       {!publicLaunch && <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>}
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
@@ -369,7 +385,7 @@ export function MicetSite({ mode, publicLaunch }: { mode: Mode; publicLaunch: bo
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-meta">
             <span className="hero-context">Minecraft PvP</span>
-            <span className="env">{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span>
+            {!selfHosted && <span className="env">{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span>}
           </div>
           <div className="hero-grid">
             <HeroTitle />
@@ -380,19 +396,19 @@ export function MicetSite({ mode, publicLaunch }: { mode: Mode; publicLaunch: bo
             </div>
           </div>
         </section>
-        <Ranking mode={mode} side />
+        <Ranking mode={mode} selfHosted={selfHosted} side />
       </>}
-      {view === "ranking" && <><PageIntro name="Elo 排行榜"><p>{mode === "demo" ? "示例数据 · " : ""}查看综合与各玩法前十名。</p></PageIntro><Ranking mode={mode} /></>}
-      {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} />}
+      {view === "ranking" && <><PageIntro name="Elo 排行榜"><p>{mode === "demo" ? "示例数据 · " : ""}查看综合与各玩法前十名。</p></PageIntro><Ranking mode={mode} selfHosted={selfHosted} /></>}
+      {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
       {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
       {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
-      {view === "shop" && <ShopPage publicLaunch={publicLaunch} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />}
+      {view === "shop" && <ShopPage catalogOnly={publicLaunch || selfHosted} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />}
       {view === "orders" && <OrdersPage mode={mode} focus={orderFocus} />}
-      {view === "account" && <AccountPage mode={mode} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
+      {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
     </main>
     <footer className="site-footer"><div className="shell footer-row">
       <span><strong>MiCet.cc</strong> · Minecraft PvP</span>
-      {!publicLaunch && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
+      {!publicLaunch && !selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
     </div></footer>
   </>;
 }

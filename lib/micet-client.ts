@@ -25,3 +25,13 @@ export async function readStats<T>(kind: string, signal: AbortSignal, filters?: 
   }
   throw new Error("连接游戏服超时，请重试。");
 }
+
+export async function readPublicStats<T>(action: string, signal: AbortSignal): Promise<T> {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const result = await api<{ data: T; pending?: true }>(action, undefined, signal);
+    if (!result.pending) return result.data;
+    await new Promise(resolve => setTimeout(resolve, 1250));
+    signal.throwIfAborted();
+  }
+  throw new Error("连接游戏服超时，请重试。");
+}

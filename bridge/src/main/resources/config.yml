@@ -1,7 +1,11 @@
 # Start with an isolated staging server and test database.
 enabled: false
 site-url: ""
-# Set both credentials for the private Sites origin via the server's secret configuration.
+# Self-hosted mode provides read-only stats and account verification.
+self-hosted: false
+# Enable only if the backend accepts connections exclusively from a proxy that enforces player login and UUID forwarding.
+trust-forwarded-identity: false
+# The Site service token applies to private Sites deployments.
 site-service-token: ""
 bridge-secret: ""
 # Create a regular, non-stackable AquaCore Tag with this identifier on staging.

@@ -33,6 +33,8 @@ public final class SiteBridge extends JavaPlugin {
     private AquaCore aqua;
     private String testTag;
     private long lastWarning;
+    private boolean selfHosted;
+    private boolean trustedBinding;
 
     @Override
     public void onEnable() {
@@ -42,11 +44,16 @@ public final class SiteBridge extends JavaPlugin {
             return;
         }
         try {
+            selfHosted = getConfig().getBoolean("self-hosted");
+            trustedBinding = !selfHosted || Bukkit.getOnlineMode() || getConfig().getBoolean("trust-forwarded-identity");
             client = new BridgeClient(getConfig().getString("site-url", "").trim(),
-                    getConfig().getString("bridge-secret", "").trim(), getConfig().getString("site-service-token", "").trim());
-            for (String raw : getConfig().getStringList("allowed-player-uuids")) allowedPlayers.add(UUID.fromString(raw.trim()));
-            testTag = getConfig().getString("test-tag", "MICET_TEST").trim();
-            if (!testTag.matches("[A-Za-z0-9_-]{1,32}")) throw new IllegalArgumentException("Invalid test Tag identifier.");
+                    getConfig().getString("bridge-secret", "").trim(), getConfig().getString("site-service-token", "").trim(), selfHosted);
+            if (!selfHosted) {
+                for (String raw : getConfig().getStringList("allowed-player-uuids")) allowedPlayers.add(UUID.fromString(raw.trim()));
+                testTag = getConfig().getString("test-tag", "MICET_TEST").trim();
+                if (!testTag.matches("[A-Za-z0-9_-]{1,32}")) throw new IllegalArgumentException("Invalid test Tag identifier.");
+            }
+            if (!trustedBinding) getLogger().warning("Website binding requires an authenticated game backend or trusted proxy.");
             aqua = (AquaCore) Bukkit.getPluginManager().getPlugin("AquaCore");
             stats = new GameStats(this, MicetPvP.getInstance());
         } catch (RuntimeException error) {
@@ -77,6 +84,10 @@ public final class SiteBridge extends JavaPlugin {
             sender.sendMessage(ChatColor.RED + "站点绑定暂不可用。");
             return true;
         }
+        if (!trustedBinding) {
+            sender.sendMessage(ChatColor.RED + "这个游戏服暂未开启站点账号验证。");
+            return true;
+        }
         if (arguments.length != 1 || !CODE.matcher(arguments[0]).matches()) return false;
         Player player = (Player) sender;
         UUID uuid = player.getUniqueId();
@@ -99,7 +110,7 @@ public final class SiteBridge extends JavaPlugin {
             body.addProperty("player", name);
             body.addProperty("code", code);
             client.post("link", body);
-            message = ChatColor.GREEN + "已绑定 MiCet.cc 测试站。";
+            message = ChatColor.GREEN + (selfHosted ? "已验证账号，请回到 MiCet 网页完成绑定。" : "已绑定 MiCet.cc 测试站。");
         } catch (BridgeClient.HttpError error) {
             message = ChatColor.RED + (error.status == 404 ? "验证码已失效。" : error.status == 409 ? "这个账号已有绑定。" : "站点验证暂不可用。");
         } catch (Exception error) {
@@ -121,7 +132,7 @@ public final class SiteBridge extends JavaPlugin {
             work(element.getAsJsonObject());
         } catch (Exception error) {
             if (System.currentTimeMillis() - lastWarning > 60_000 && isEnabled()) {
-                getLogger().warning("Private Site bridge retrying (" + error.getClass().getSimpleName() + ").");
+                getLogger().warning("Website bridge retrying (" + error.getClass().getSimpleName() + ").");
                 lastWarning = System.currentTimeMillis();
             }
         }
@@ -139,7 +150,7 @@ public final class SiteBridge extends JavaPlugin {
             else if ("match-detail".equals(kind)) data = stats.matchDetail(
                     UUID.fromString(GameStats.string(payload, "uuid")),
                     UUID.fromString(GameStats.string(payload, "matchId")), GameStats.string(payload, "target"));
-            else if ("delivery".equals(kind)) outcome = deliver(payload);
+            else if ("delivery".equals(kind) && !selfHosted) outcome = deliver(payload);
             else outcome = "failed";
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
