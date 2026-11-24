@@ -3,8 +3,14 @@ export async function api<T>(action: string, body?: Record<string, unknown>, sig
     signal,
     ...(body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
   });
-  const json = await response.json() as { error?: string };
-  if (!response.ok) throw new Error(json.error ?? "请求失败，请稍后再试。");
+  const failure = response.ok ? "服务器返回了无法读取的响应。" : `请求失败（HTTP ${response.status}），请稍后再试。`;
+  const contentType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
+  if (contentType !== "application/json" && !contentType?.endsWith("+json")) throw new Error(failure);
+  const json = await response.json().catch(error => {
+    if (signal?.aborted) throw error;
+    throw new Error(failure);
+  }) as { error?: string };
+  if (!response.ok) throw new Error(json?.error ?? failure);
   return json as T;
 }
 

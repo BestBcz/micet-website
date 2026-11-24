@@ -114,7 +114,7 @@ function ServerRow() {
   </section>;
 }
 
-export function ServerHome({ title }: { title: ReactNode }) {
+export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLaunch: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const address = useRef<HTMLInputElement>(null);
   const [copied, setCopied] = useState("");
@@ -134,10 +134,10 @@ export function ServerHome({ title }: { title: ReactNode }) {
       <div className="server-intro">
         <p className="hero-context">Minecraft Java Edition</p>
         {title}
-        <p className="server-description">练习对战，挑战排位，查看你在 MiCet 的每场战绩。</p>
+        <p className="server-description">{publicLaunch ? "加入 MiCet 练习对战、挑战排位。" : "练习对战，挑战排位，查看你在 MiCet 的每场战绩。"}</p>
         <div className="server-actions">
           <button className="btn primary" type="button" onClick={() => dialog.current?.showModal()}>Play Now</button>
-          <a className="btn" href="#stats">查看战绩</a>
+          <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看游戏 Tag" : "查看战绩"}</a>
         </div>
       </div>
       <ServerRow />

@@ -9,14 +9,20 @@ export type Order = { id: string; sku: string; player: string; status: "pending"
 
 export const TEST_SKU = "micet-test";
 export const DEMO_PLAYER = "KairoPvP";
+export const testTag = { tag: "MICET TEST", name: "测试标签", description: "用于验证站内结账和游戏内 Tag 发放。" };
+
+// AquaCore Tags snapshot, ordered by game menu weight (highest first).
 export const catalog = [
-  { id: TEST_SKU, tag: "MICET TEST", name: "测试标签", theme: "cyan", description: "用于验证站内结账和游戏内 Tag 发放。" },
-  { id: "vip", tag: "VIP", name: "贵宾玩家", theme: "gold", description: "服务器装饰标签。" },
-  { id: "elite", tag: "ELITE", name: "精英成员", theme: "sky", description: "服务器装饰标签。" },
-  { id: "mvp", tag: "MVP", name: "全场最佳", theme: "indigo", description: "服务器装饰标签。" },
-  { id: "sweat", tag: "SWEAT", name: "分奴狂魔", theme: "red", description: "服务器装饰标签。" },
-  { id: "god", tag: "GOD", name: "操作真神", theme: "gold", description: "服务器装饰标签。" },
-  { id: "toxic", tag: "TOXIC", name: "剧毒玩家", theme: "green", description: "服务器装饰标签。" },
+  { name: "Parkour", prefix: "Parkour", color: "dark-gray" },
+  { name: "Vape", prefix: "Vape", color: "red" },
+  { name: "Vip", prefix: "Vip", color: "dark-green" },
+  { name: "Heart", prefix: "❤", color: "dark-red" },
+  { name: "Symbol#1", prefix: "❖", color: "red" },
+  { name: "Symbol#2", prefix: "☠", color: "red" },
+  { name: "Symbol#3", prefix: "☀", color: "red" },
+  { name: "Symbol#4", prefix: "♚", color: "red" },
+  { name: "Symbol#5", prefix: "✖", color: "red" },
+  { name: "top", prefix: "〄", color: "dark-red" },
 ] as const;
 
 const kits = [

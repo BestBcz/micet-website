@@ -410,6 +410,12 @@ tbody tr:focus-within, tbody tr:hover { background: var(--color-quiet); }
   font: 650 var(--text-label)/1.35 var(--font-mono);
 }
 .tag-test { color: var(--color-accent); }
+.tag-dark-gray { color: #a3a3a3; }
+.tag-dark-green { color: #58c572; }
+.tag-dark-red { color: #df6969; }
+.tag-red { color: #ff5555; }
+.card .catalog-tag-name { display: grid; justify-items: start; gap: var(--spacing-8); margin: 0; }
+.catalog-tag-caption { color: var(--color-muted-grey); font-size: var(--text-label); }
 .cards .tag {
   padding: 0;
   border: 0;

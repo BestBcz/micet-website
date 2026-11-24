@@ -28,6 +28,14 @@ For a hosted Worker, run `node scripts/minecraft-status.mjs` on a Node host with
 
 ## Hosting
 
+For a public showcase on a VPS, use the public launch flag after building.
+
+```sh
+npm start -- --port 8787 --var MICET_PUBLIC_LAUNCH:1
+```
+
+This serves the homepage, live MOTD and the Tag catalog. It disables account, stats, bridge and checkout endpoints in the application. Point Cloudflare Tunnel at `http://127.0.0.1:8787`. The catalog is a snapshot of the AquaCore `Tags` collection and can be updated in `lib/micet-data.ts`.
+
 The production build targets a Sites-hosted Worker with a D1 `DB` binding. Register your own Sites project when deploying this checkout and store configuration values as runtime variables.
 
 Sites provides verified visitor identity at its gateway. If deploying outside Sites, use an authenticated gateway that strips incoming identity headers and injects its own, or replace the identity adapter before exposing account and order routes. Keep `MICET_LOCAL_TEST` limited to local previews.

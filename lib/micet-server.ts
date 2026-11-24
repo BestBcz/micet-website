@@ -25,6 +25,10 @@ export function micetMode(): Mode {
   return env.MICET_MODE === "bridge" ? "bridge" : "demo";
 }
 
+export function isPublicLaunch(): boolean {
+  return env.MICET_PUBLIC_LAUNCH === "1";
+}
+
 function database(): D1Database {
   if (!env.DB) throw new RequestError(503, "站点数据库暂不可用。");
   return env.DB;
@@ -293,13 +297,16 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
 
 export async function micetApi(request: Request, area: string, action: string) {
   try {
+    if (area === "micet" && action === "server-status" && request.method !== "POST") {
+      return json(await getServerStatus(env.MICET_STATUS_URL));
+    }
+    if (isPublicLaunch()) throw new RequestError(404, "该功能暂未开放。");
     const body = request.method === "POST" ? await readBody(request) : null;
     if (area === "bridge" && body) {
       await requireBridge(request);
       return await bridgePost(database(), action, body);
     }
     if (area !== "micet") throw new RequestError(404, "找不到页面。");
-    if (!body && action === "server-status") return json(await getServerStatus(env.MICET_STATUS_URL));
     const owner = await ownerId(request);
     if (body && request.headers.get("origin") !== new URL(request.url).origin) {
       throw new RequestError(403, "请求来源无效。");
