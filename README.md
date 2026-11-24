@@ -2,7 +2,7 @@
 
 Minecraft PvP website for player profiles, Elo leaderboards, personal match history and cosmetic Tag test checkout.
 
-The default demo mode uses generated players and simulated receipts. Bridge mode serves responses from the separate MicetSiteBridge game plugin. Both modes use D1 for account links, orders and jobs. Mode-specific records are isolated. The checkout always simulates payment.
+The default demo mode uses generated players and simulated receipts. Bridge mode serves responses from the separately maintained game plugin. Both modes use D1 for account links, orders and jobs. Mode-specific records are isolated. The checkout always simulates payment. [MicetSiteBridge repository](https://github.com/BestBcz/MicetSiteBridge)
 
 ## Development
 
@@ -67,7 +67,7 @@ Point the staging hostname's Tunnel route at `http://127.0.0.1:8788`. Allow thes
 | GET | `/api/micet/server-status`, `/api/micet/leaderboard`, `/api/micet/player`, `/api/micet/status`, `/api/micet/result` |
 | POST | `/api/micet/code`, `/api/micet/confirm`, `/api/micet/logout`, `/api/micet/stats`, `/api/bridge/link`, `/api/bridge/poll`, `/api/bridge/receipt` |
 
-Install MicetSiteBridge 0.3.2 on the Bukkit Practice backend with MicetPvP and AquaCore. Its Elo leaderboard uses the same ranked and hidden kit flags as the public in-game queue menu. Update the website first so it can accept the larger match-detail receipts that contain multiple inventory snapshots. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website.
+Install MicetSiteBridge 0.3.2 or newer on the Bukkit Practice backend with MicetPvP and AquaCore. Its Elo leaderboard uses the same ranked and hidden kit flags as the public in-game queue menu. Update the website first so it can accept the larger match-detail receipts that contain multiple inventory snapshots. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website. [Plugin releases](https://github.com/BestBcz/MicetSiteBridge/releases)
 
 ```yaml
 enabled: true
@@ -87,12 +87,4 @@ The production build targets a Sites-hosted Worker with a D1 `DB` binding. Regis
 
 Sites provides verified visitor identity at its gateway. If deploying outside Sites, use an authenticated gateway that strips incoming identity headers and injects its own, or replace the identity adapter before exposing account and order routes. Keep `MICET_LOCAL_TEST` limited to local previews.
 
-An enabled private bridge requires the MicetSiteBridge game plugin, the Site’s service credential and a runtime bridge secret. Use bridge version 0.2.0 or later for saved match inventories. The bridge checks the player’s existing match-history permissions before returning one participant’s snapshot.
-
-Build the bridge with JDK 21 from this repository on Windows using PowerShell.
-
-```powershell
-./bridge/build.ps1 -Practice ../Micet-PotPvP -AquaCore ../AquaCore/release/AquaCore.jar
-```
-
-The JAR is written to `bridge/build/MicetSiteBridge.jar`. Its configuration is generated on first start.
+An enabled private bridge requires the MicetSiteBridge game plugin, the Site’s service credential and a runtime bridge secret. Use bridge version 0.2.0 or later for saved match inventories. The bridge checks the player’s existing match-history permissions before returning snapshots. [Plugin build instructions](https://github.com/BestBcz/MicetSiteBridge#build)

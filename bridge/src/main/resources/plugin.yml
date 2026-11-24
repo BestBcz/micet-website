@@ -1,8 +1,0 @@
-name: MicetSiteBridge
-main: cc.micet.sitebridge.SiteBridge
-version: 0.3.2
-depend: [MicetPvP, AquaCore]
-commands:
-  micetlink:
-    description: Bind your Minecraft account to the private MiCet test Site.
-    usage: /micetlink <code>
