@@ -7,6 +7,7 @@ import {
 import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
+import { MotionEnabled, useSiteMotion } from "./site-motion";
 import { MatchDetailPage } from "./match-detail";
 import serverLogo from "./micet-logo.png?inline";
 import "./micet.css";
@@ -51,7 +52,7 @@ function HeroTitle({ home = false }: { home?: boolean }) {
   const ref = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     const heading = ref.current;
-    if (!heading || !("IntersectionObserver" in window) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!heading || !("IntersectionObserver" in window)) return;
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting) return;
       heading.dataset.entered = "true";
@@ -62,7 +63,7 @@ function HeroTitle({ home = false }: { home?: boolean }) {
   }, []);
 
   const letters = (text: string, offset: number) => Array.from(text, (letter, index) =>
-    <span className="title-letter" key={index} style={{ "--letter-delay": (offset + index) * 35 + "ms" } as CSSProperties}>{letter}</span>);
+    <span className="title-letter" key={index} data-glyph={home && offset > 0 ? letter : undefined} style={{ "--letter-delay": (offset + index) * 35 + "ms" } as CSSProperties}>{letter}</span>);
 
   if (home) return <h1 id="server-title" className="hero-title server-title" ref={ref} aria-label="MiCet.cc">
     <span className="title-line" aria-hidden="true">{letters("MiCet", 0)}<span className="title-accent">{letters(".cc", 5)}</span></span>
@@ -344,6 +345,7 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
 }
 
 export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publicLaunch: boolean; selfHosted: boolean }) {
+  const motion = useSiteMotion();
   const [route, setRoute] = useState<Route>({ view: "home" });
   const [status, setStatus] = useState<SiteStatus>();
   const [statusError, setStatusError] = useState("");
@@ -370,7 +372,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     return () => stop.abort();
   }, [publicLaunch]);
   const view = route.view;
-  return <>
+  return <MotionEnabled.Provider value={motion.enabled}><div data-motion={motion.enabled ? "on" : "reduce"}>
     <a className="skip-link" href="#main" onClick={event => {
       event.preventDefault();
       main.current?.focus();
@@ -412,7 +414,12 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     </main>
     <footer className="site-footer"><div className="shell footer-row">
       <span><strong>MiCet.cc</strong> · 1.7-1.8 Practice Server</span>
+      <label className="motion-control">动效
+        <select value={motion.preference} onChange={event => motion.setPreference(event.target.value)}>
+          <option value="system">跟随系统</option><option value="on">开启</option><option value="reduce">减少</option>
+        </select>
+      </label>
       {!publicLaunch && !selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
     </div></footer>
-  </>;
+  </div></MotionEnabled.Provider>;
 }

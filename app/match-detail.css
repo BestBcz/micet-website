@@ -66,9 +66,18 @@
   color: var(--color-bone);
 }
 .item-slot.empty { opacity: .72; }
-.item-slot:hover:not(.empty), .item-slot[aria-pressed="true"] {
+.item-slot[aria-pressed="false"]:hover {
   border-color: var(--color-accent);
   background: #25363a;
+}
+.item-slot[aria-pressed="true"] {
+  border-color: #f4f1eb;
+  background: #424549;
+  box-shadow: inset 0 0 0 1px #dedbd5;
+}
+@keyframes inventory-arrive { from { opacity: .72; } to { opacity: 1; } }
+[data-motion="on"] [data-player-switched="true"] .inventory-window {
+  animation: inventory-arrive .18s var(--expo-out);
 }
 .item-slot:focus-visible { z-index: 1; outline-offset: 1px; }
 .item-icon {

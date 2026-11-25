@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { MotionEnabled } from "./site-motion";
 import { api } from "@/lib/micet-client";
 import { SERVER_ADDRESS, type ServerStatus } from "@/lib/micet-server-status";
 import "./server-home.css";
@@ -13,16 +14,17 @@ const colorCodes: Record<string, string> = {
 };
 
 function ObfuscatedText({ text }: { text: string }) {
+  const enabled = useContext(MotionEnabled);
   const [display, setDisplay] = useState(text);
   useEffect(() => {
-    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    if (!enabled) return;
     const characters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     const timer = setInterval(() => {
-      if (!document.hidden && !motion.matches) setDisplay(text.replace(/[!-~]/g, () => characters[Math.floor(Math.random() * characters.length)]));
+      if (!document.hidden) setDisplay(text.replace(/[!-~]/g, () => characters[Math.floor(Math.random() * characters.length)]));
     }, 120);
     return () => clearInterval(timer);
-  }, [text]);
-  return <><span className="motd-sr-text">{text}</span><span aria-hidden="true">{display}</span></>;
+  }, [enabled, text]);
+  return <><span className="motd-sr-text">{text}</span><span aria-hidden="true">{enabled ? display : text}</span></>;
 }
 
 function MotdLine({ line }: { line: string }) {
@@ -137,7 +139,9 @@ export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLa
         {title}
         {!publicLaunch && <p className="server-description">查看你在服务器的每场战绩。</p>}
         <div className="server-actions">
-          <button className="btn primary" type="button" onClick={() => dialog.current?.showModal()}>Play Now</button>
+          <button className="btn primary play-now" type="button" onClick={() => dialog.current?.showModal()}>
+            Play Now <span className="play-arrow" aria-hidden="true">→</span>
+          </button>
           <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看游戏 Tag" : "查看战绩"}</a>
         </div>
       </div>

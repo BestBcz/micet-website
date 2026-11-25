@@ -33,6 +33,12 @@
 .server-description { max-width: 30rem; color: var(--color-bone); font-size: var(--text-body-lg); }
 .server-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--spacing-16); }
 .server-actions > .btn { min-height: 3.375rem; min-width: 8.25rem; }
+.server-actions .primary { gap: .6em; }
+[data-motion="on"] .play-arrow { transition: transform .3s var(--expo-out); }
+[data-motion="on"] .btn:focus-visible .play-arrow { transform: translateX(4px); }
+@media (hover: hover) {
+  [data-motion="on"] .btn:hover .play-arrow { transform: translateX(4px); }
+}
 
 .server-list { width: min(100%, 48rem); }
 .server-list-head {
@@ -111,6 +117,11 @@
   color: var(--color-bone);
 }
 .play-dialog::backdrop { background: rgb(0 0 0 / 74%); }
+@keyframes address-arrive {
+  from { opacity: .65; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+[data-motion="on"] .play-dialog[open] { animation: address-arrive .24s var(--expo-out); }
 .play-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: var(--spacing-16); }
 .play-dialog-head h2 { font-size: clamp(1.5rem, 4vw, 2.25rem); }
 .play-form > p { margin-block: var(--spacing-16); color: var(--color-muted-grey); }

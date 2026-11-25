@@ -246,7 +246,7 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
     setRetry(value => value + 1);
   };
 
-  return <section className="match-page">
+  return <section className="match-page" data-player-switched={Boolean(target)}>
     <header className="page-intro">
       <a className="crumb" href="#matches">返回我的对局</a>
       <h1>对局详情</h1>
@@ -264,7 +264,7 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
           </p>
           <div className="match-participants" aria-label="选择对局玩家">
             {detail.participants.map(entry => <button key={entry.uuid} className="pill" aria-pressed={entry.uuid === selected}
-              onClick={() => setTarget(entry.uuid)}>
+              onClick={() => { if (entry.uuid !== selected) setTarget(entry.uuid); }}>
               {entry.name}{entry.uuid === viewer ? "（我）" : ""}
               <span>{detail.winnerTeam === null ? "平局" : detail.winnerTeam === entry.team ? "胜利" : "战败"}</span>
             </button>)}
