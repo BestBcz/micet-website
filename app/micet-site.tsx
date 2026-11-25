@@ -19,8 +19,8 @@ type SiteStatus = { mode: Mode; linked: Link | null; connected: boolean };
 type Code = { code: string; expiresAt: number };
 
 const views: View[] = ["home", "stats", "ranking", "player", "matches", "match", "shop", "orders", "account"];
-const menu: Array<[View, string]> = [["home", "首页"], ["stats", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "Tag 商店"]];
-const publicMenu: Array<[View, string]> = [["home", "首页"], ["shop", "游戏 Tag"]];
+const menu: Array<[View, string]> = [["home", "首页"], ["stats", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "商店"]];
+const publicMenu: Array<[View, string]> = [["home", "首页"], ["shop", "商店"]];
 function navView(view: View) {
   if (view === "player") return "stats";
   if (view === "match") return "matches";
@@ -290,7 +290,7 @@ function ShopPage({ catalogOnly, linked, onOrder }: { catalogOnly: boolean; link
     finally { setBusy(false); }
   }
   return <>
-    <PageIntro name={catalogOnly ? "游戏 Tag" : "Tag 商店"}><p>查看 MiCet 游戏内标签。站内购买筹备中。</p></PageIntro>
+    <PageIntro name="商店"><p>查看 MiCet 游戏内标签。站内购买筹备中。</p></PageIntro>
     {!catalogOnly && <>
       <section className="panel feature" aria-label="测试商品">
         <div><span className="tag tag-test">[{testTag.tag}]</span><h2>{testTag.name}</h2><p>{testTag.description} 本次测试无需付款。</p></div>
@@ -347,7 +347,7 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
     {error && <p className="inline-error" role="alert">{error} <button className="btn" onClick={() => { setError(""); refresh(n => n + 1); }}>重试</button></p>}
     <div className="vstack">
       {!orders ? <div className="panel"><Message>正在读取订单…</Message></div>
-        : !orders.length ? <div className="panel"><Message>暂无订单。 <a className="sub-link" href="#shop">前往 Tag 商店</a></Message></div>
+        : !orders.length ? <div className="panel"><Message>暂无订单。 <a className="sub-link" href="#shop">前往商店</a></Message></div>
         : orders.map(order => <article key={order.id} className={"panel card vstack" + (focus === order.id ? " order-focus" : "")}>
           <div className="section-title"><div><span className="tag tag-test">[MICET TEST]</span><h2>测试标签</h2></div><span className="order-status" role="status">{statusLabel[order.status]}</span></div>
           <p>接收人 {order.player} · {formatDate(order.created_at)}{order.detail ? " · " + order.detail : ""}</p>
@@ -427,7 +427,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
       {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
       {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
-      {view === "shop" && (selfHosted && !publicLaunch ? <LiveShop key={status?.linked?.uuid} linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
+      {view === "shop" && (selfHosted && !publicLaunch ? <LiveShop linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
         <ShopPage catalogOnly={publicLaunch} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
       {view === "orders" && (selfHosted ? <LiveOrders key={status?.linked?.uuid} linked={status?.linked} focus={route.orderId}/> : <OrdersPage mode={mode} focus={orderFocus} />)}
       {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}

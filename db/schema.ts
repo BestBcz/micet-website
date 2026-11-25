@@ -5,11 +5,23 @@ export const shopOrders = sqliteTable("shop_orders", {
   id: text().primaryKey(), uuid: text().notNull(), player: text().notNull(), sku: text().notNull(),
   amount: integer().notNull(), channel: text().notNull(), status: text().notNull(),
   pay_url: text(), qr_url: text(), expires_at: integer(), next_check: integer().notNull(),
-  created_at: integer().notNull(), detail: text(),
+  created_at: integer().notNull(), detail: text(), buyer: text(), lookup_key: text(),
 }, table => [
   uniqueIndex("shop_open_product").on(table.uuid, table.sku).where(sql`status IN ('pending','paid','delivered','review')`),
+  index("shop_lookup_orders").on(table.lookup_key, table.created_at),
+  index("shop_buyer_orders").on(table.buyer, table.created_at),
   index("shop_due").on(table.next_check),
 ]);
+export const shopLookupContacts = sqliteTable("shop_lookup_contacts", {
+  contact_hash: text().primaryKey(), salt: text().notNull(),
+});
+export const shopLookupSessions = sqliteTable("shop_lookup_sessions", {
+  token_hash: text().primaryKey(), lookup_key: text().notNull(), expires_at: integer().notNull(),
+}, table => [index("shop_lookup_expiry").on(table.expires_at)]);
+export const shopLookupLimits = sqliteTable("shop_lookup_limits", {
+  bucket: text().primaryKey(), attempts: integer().notNull(), expires_at: integer().notNull(),
+}, table => [index("shop_limit_expiry").on(table.expires_at)]);
+
 export const shopEvents = sqliteTable("shop_events", {
   id: text().primaryKey(), order_id: text().notNull(), kind: text().notNull(), amount: integer().notNull(),
   created_at: integer().notNull(),

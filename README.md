@@ -79,7 +79,7 @@ trust-forwarded-identity: false
 
 For offline-mode Bukkit backends, enable `trust-forwarded-identity` only after confirming the backend is reachable exclusively through a proxy that authenticates every player and forwards their verified UUID.
 
-Compare two players' Elo and wins with the in-game leaderboard. Generate a code on the site, run `/micetlink <code>` in Practice, then select **完成绑定** in the originating browser. Verify that a second account cannot read the first account's match. Public rankings and profiles use live bridge data with a short cache. For live checkout, apply migration 0002 and configure the shop and bridge using the [deployment guide](SHOP.md).
+Compare two players' Elo and wins with the in-game leaderboard. Generate a code on the site, run `/micetlink <code>` in Practice, then select **完成绑定** in the originating browser. Verify that a second account cannot read the first account's match. Public rankings and profiles use live bridge data with a short cache. For live checkout, apply migrations 0002 through 0004 and configure the shop and bridge using the [deployment guide](SHOP.md).
 
 After building, run `node --test tests/self-hosted.mjs tests/shop.mjs`. The tests use isolated local Workers and D1 databases, signed payment fixtures and simulated game bridge requests.
 

@@ -1,4 +1,4 @@
-# MiCet Tag 商店上线
+# MiCet 商店上线
 
 现有 VPS 继续运行网站，现有 Practice 后端负责检查并发放 AquaCore 的永久 Tag。Vape、Heart 分别定价。价格留空时该商品只展示。网站订单保存在网站自己的 D1 中，玩家权益由游戏服保存。
 
@@ -36,10 +36,10 @@ npm install --include=dev --prefer-offline --no-audit --no-fund --maxsockets=1
 npm run build
 ```
 
-已有账号绑定功能的数据库通常已执行 `0000` 和 `0001`。对同一个数据库执行一次新增迁移；全新数据库按 `drizzle` 中的 0000、0001、0002 顺序执行。若不确定迁移进度，先用同一命令的 `--command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"` 替换 `--file ...` 查看现有表。
+已有账号绑定功能的数据库通常已执行 `0000` 和 `0001`。已启用游客赠送并执行 0003 的数据库，本次只需执行 0004。若已经执行 0002 但尚未执行 0003，请先对同一数据库执行 `drizzle/0003_gift_orders.sql`。全新数据库按 0000、0001、0002、0003、0004 顺序各执行一次。0003 会把原订单归回原购买账号。若不确定迁移进度，先用同一命令的 `--command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"` 替换 `--file ...` 查看现有表。
 
 ```sh
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_xiaodou_shop.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_order_lookup.sql
 ```
 
 将以下命令中的配置来源路径替换为上一步的私有文件。每次重新构建后重新安装私有配置；若网站已有 systemd 服务，使用原服务启动相同的 `npm start` 命令。
@@ -49,7 +49,7 @@ install -m 600 /path/to/private/micet.dev.vars dist/server/.dev.vars
 npm start -- --port 8787
 ```
 
-在 Practice 服停服更新时，将插件替换为 MicetSiteBridge 0.4.0，并沿用已能绑定账号的 `self-hosted`、`site-url` 和 `bridge-secret` 配置。它使用已安装的 AquaCore 和 MicetPvP。正式价格可在网站和游戏插件均已更新后填写并重启网站。
+在 Practice 服停服更新时，将插件替换为 MicetSiteBridge 0.5.0，并沿用已能绑定账号的 `self-hosted`、`site-url` 和 `bridge-secret` 配置。它使用已安装的 AquaCore 和 MicetPvP。正式价格可在网站和游戏插件均已更新后填写并重启网站。
 
 ## 3. Tunnel 和首单
 
@@ -57,13 +57,13 @@ npm start -- --port 8787
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/api/micet/shop`、`/api/micet/orders`、`/api/payments/return` | 商品、当前玩家的订单、从收银台返回订单页 |
-| POST | `/api/micet/checkout` | 绑定后的玩家下单 |
+| GET | `/api/micet/shop`、`/api/micet/orders`、`/api/payments/return` | 商品、当前买家的订单、从收银台返回订单页 |
+| POST | `/api/micet/recipient`、`/api/micet/checkout`、`/api/micet/order-lookup` | 收货角色核验、下单、订单查询和退出查询 |
 | POST | `/api/payments/xiaodou` | 小豆服务端回调，允许直接到源站，对该路径免浏览器挑战及登录拦截 |
 
 `/api/payments/reconcile` 只供网站启动进程在 VPS 本机调用，公网规则可拦截这个路径。实际买家地址由 Tunnel 随请求提供，请保留 `CF-Connecting-IP`。应用通过平台签名验证回调，再按商户单号和金额入账。
 
-打开 `https://micet.cc.cd/#shop`，用已绑定且未持有目标 Tag 的玩家购买。桌面显示二维码，手机可点「打开收银台」。在小豆后台用网站显示的商户订单号核对金额。付款后可关掉浏览器，网站进程每分钟检查到期的待核订单；玩家进入 Practice 后桥接插件会重试发放，在「我的订单」中可以查看到账状态。在游戏中打开 Tag 菜单确认实际权益。
+打开 `https://micet.cc.cd/#shop`，输入自己或朋友的游戏 ID。绑定账号默认带入自己的 ID，游客可直接填写。核验要求 AquaCore 的 MongoDB 中有唯一匹配的真实档案，且玩家尚未拥有该商品。核对页面显示的收货角色，填写买家自己的 QQ 号或邮箱，再设置并确认订单查询密码，然后选择付款方式。桌面显示二维码，手机可点「打开收银台」。在小豆后台用网站显示的商户订单号核对金额。付款后可关掉浏览器，网站进程每分钟检查到期的待核订单；收货角色离线时也会发放。游客和已绑定买家均可在其他设备打开「我的订单」，用下单时同一组联系方式与密码查询。相同组合可查看对应的多笔订单，不同密码的订单分别查询。QQ 号码与 QQ 邮箱分别识别。联系方式仅用于匹配订单，当前不发送验证码，也不提供邮箱找回；请保存好查询密码。验证后的查询会话有效期为 15 分钟，可提前退出。升级前未设凭证的订单沿用原购买账号或原浏览器查看。订单号和收货 ID 用于售后。上线验收时，请用离线角色做一笔实际订单，检查到账状态，再登录游戏打开 Tag 菜单核对。
 
 ## 对账和退款
 

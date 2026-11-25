@@ -5,18 +5,18 @@ const challengeCookie = "__Host-micet-challenge";
 const sessionCookie = "__Host-micet-session";
 const sessionLifetime = 7 * 86_400_000;
 
-function token() {
+export function token() {
   return Array.from(crypto.getRandomValues(new Uint8Array(32)), byte => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function cookieHash(request: Request, name: string) {
+export async function cookieHash(request: Request, name: string) {
   const prefix = name + "=";
   const value = request.headers.get("cookie")?.split(";").map(part => part.trim())
     .find(part => part.startsWith(prefix))?.slice(prefix.length);
   return value && /^[0-9a-f]{64}$/.test(value) ? hashToken(value) : null;
 }
 
-function writeCookie(response: Response, name: string, value: string, lifetime: number) {
+export function writeCookie(response: Response, name: string, value: string, lifetime: number) {
   response.headers.append("Set-Cookie", `${name}=${value}; Path=/; Max-Age=${lifetime / 1000}; Secure; HttpOnly; SameSite=Strict`);
 }
 
@@ -25,6 +25,14 @@ export async function siteSession(db: D1Database, request: Request) {
   if (!hash) return null;
   return db.prepare("SELECT uuid, player FROM web_sessions WHERE hash=? AND expires_at>?")
     .bind(hash, Date.now()).first<Link>();
+}
+
+const shopCookie = "__Host-micet-shop";
+export const guestShopHash = (request: Request) => cookieHash(request, shopCookie);
+
+export function startGuestShop(response: Response) {
+  writeCookie(response, shopCookie, token(), 90 * 86_400_000);
+  return response;
 }
 
 export async function startSiteLink(db: D1Database, request: Request) {
@@ -82,13 +90,17 @@ export async function confirmSiteLink(db: D1Database, request: Request) {
 }
 
 export async function endSiteSession(db: D1Database, request: Request) {
-  const [session, challenge] = await Promise.all([cookieHash(request, sessionCookie), cookieHash(request, challengeCookie)]);
+  const [session, challenge, lookup] = await Promise.all([
+    cookieHash(request, sessionCookie), cookieHash(request, challengeCookie), cookieHash(request,"__Host-micet-lookup"),
+  ]);
   await db.batch([
     db.prepare("DELETE FROM web_sessions WHERE hash=?").bind(session),
     db.prepare("DELETE FROM web_link_challenges WHERE browser_hash=?").bind(challenge),
+    ...(lookup ? [db.prepare("DELETE FROM shop_lookup_sessions WHERE token_hash=?").bind(lookup)] : []),
   ]);
   const response = json({ ok: true });
   writeCookie(response, sessionCookie, "", 0);
+  writeCookie(response, "__Host-micet-lookup", "", 0);
   writeCookie(response, challengeCookie, "", 0);
   return response;
 }

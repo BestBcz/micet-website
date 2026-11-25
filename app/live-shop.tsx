@@ -32,10 +32,27 @@ function Cashier({order}:{order:Purchase}) {
   </div>;
 }
 
+function LookupFields({contact,password,onContact,onPassword,creating=false}:{contact:string;password:string;onContact:(s:string)=>void;onPassword:(s:string)=>void;creating?:boolean}) {
+  return <>
+    <label htmlFor="order-contact">买家的 QQ 号或邮箱</label>
+    <input id="order-contact" className="shop-player" value={contact} onChange={e=>onContact(e.target.value)}
+      autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={254} required/>
+    <label htmlFor="order-password">订单查询密码</label>
+    <input id="order-password" className="shop-player" type="password" value={password} onChange={e=>onPassword(e.target.value)}
+      autoComplete={creating?"new-password":"current-password"} minLength={8} maxLength={128} required/>
+  </>;
+}
+
 export function LiveShop({linked,onOrder}:{linked?:Link|null;onOrder:(id:string)=>void}) {
+  const [contact,setContact]=useState("");
+  const [password,setPassword]=useState("");
+  const [confirm,setConfirm]=useState("");
   const [offer,setOffer]=useState<Offer>();
   const [selected,select]=useState<Product>();
   const [busy,setBusy]=useState(false);
+  const [typedPlayer,setPlayer]=useState<string>();
+  const player=typedPlayer ?? linked?.player ?? "";
+  const [recipient,setRecipient]=useState<Link>();
   const [error,setError]=useState("");
   const [revision,retry]=useState(0);
   const pending=useRef<AbortController|null>(null);
@@ -43,15 +60,18 @@ export function LiveShop({linked,onOrder}:{linked?:Link|null;onOrder:(id:string)
     const stop=new AbortController();
     api<Offer>("shop",undefined,stop.signal).then(setOffer).catch(e=>{if(!stop.signal.aborted)setError(e.message);});
     return ()=>{stop.abort();pending.current?.abort();};
-  },[revision,linked?.uuid]);
-  async function buy(channel:Channel) {
-    if (!selected || !linked || pending.current) return;
+  },[revision]);
+  async function submit(channel?:Channel) {
+    if (!selected || pending.current || (channel && !recipient)) return;
+    if (channel && password!==confirm) {setError("两次输入的查询密码不一致。");return;}
     const stop=new AbortController();
     pending.current=stop;
     setBusy(true); setError("");
     try {
       for(let i=0;i<20;i++){
-        const result=await api<{order?:Purchase;checking?:boolean}>("checkout",{sku:selected.name,amount:selected.amount,channel},stop.signal);
+        const result=await api<{order?:Purchase;recipient?:Link;checking?:boolean}>(channel ? "checkout" : "recipient",
+          {sku:selected.name,player:player.trim(),amount:selected.amount,channel,recipientUuid:recipient?.uuid,...(channel?{contact,password}:{})},stop.signal);
+        if(result.recipient){setRecipient(result.recipient);return;}
         if(result.order){ onOrder(result.order.id);return; }
         if(!result.checking)break;
         await new Promise(resolve=>setTimeout(resolve,1000));
@@ -62,47 +82,89 @@ export function LiveShop({linked,onOrder}:{linked?:Link|null;onOrder:(id:string)
     finally {pending.current=null;if(!stop.signal.aborted)setBusy(false);}
   }
   return <>
-    <div className="page-intro"><h1>Tag 商店</h1><a className="sub-link" href="#orders">我的订单</a></div>
+    <div className="page-intro"><h1>商店</h1><a className="sub-link" href="#orders">我的订单</a></div>
     <div className="cards">{catalog.map(tag=>{
       const product=offer?.products.find(i=>i.name===tag.name);
       return <article className="panel card vstack" key={tag.name}><h2><span className={"tag tag-"+tag.color}>[{tag.prefix}]</span> {tag.name}</h2>
         <p>永久称号{product?.amount ? " · "+price(product.amount) : ""}</p>
-        {product?.amount && offer?.channels.length ? linked ? <button className="btn" disabled={busy} onClick={()=>{select(product);setError("");}}>购买 {tag.name}</button>
-          : <a href="#account" className="btn">绑定账号后购买</a> : <small>仅供展示</small>}</article>;
+        {product?.amount && offer?.channels.length ? <button className="btn" disabled={busy} onClick={()=>{select(product);setRecipient(undefined);setError("");}}>购买 {tag.name}</button>
+          : <small>仅供展示</small>}</article>;
     })}</div>
-    {selected && linked && <section className="panel card vstack" aria-label="确认订单"><h2>确认购买 {selected.name}</h2>
-      <p>接收角色 {linked.player} · 永久解锁 · 实付 {price(selected.amount!)}</p>
-      {offer?.channels.map(c=><button key={c} disabled={busy} className="btn primary" onClick={()=>void buy(c)}>{label[c]}</button>)}
-      {busy && <p role="status">正在核对游戏权益并准备收银台…</p>}</section>}
+    {selected && <section className="panel card vstack" aria-label="确认订单"><h2>购买 {selected.name}</h2>
+      <form className="vstack" onSubmit={e=>{e.preventDefault();void submit();}}>
+        <label htmlFor="shop-player">收货玩家的游戏 ID</label>
+        <input id="shop-player" className="shop-player" value={player} maxLength={16} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+          required pattern="[A-Za-z0-9_]{1,16}" disabled={busy} aria-describedby="shop-hint"
+          onChange={e=>{setPlayer(e.target.value);setRecipient(undefined);setError("");}}/>
+        <small id="shop-hint">填自己或朋友的游戏 ID，收货玩家可以离线。</small>
+        {!recipient && <button className="btn" disabled={busy || !player.trim()}>核验收货玩家</button>}
+      </form>
+      {recipient && <><p role="status">收货角色 <strong>{recipient.player}</strong> · 永久解锁 · 实付 {price(selected.amount!)}</p>
+        <form className="vstack" onSubmit={e=>{
+          e.preventDefault();
+          const button=(e.nativeEvent as SubmitEvent).submitter as HTMLButtonElement|null;
+          const channel=offer?.channels.find(c=>c===button?.value);
+          if(channel) void submit(channel);
+        }}>
+          <small>请为这笔订单设一个独立查询密码（至少 8 个字符）。换设备时，用同一组 QQ 号或邮箱和密码查询。</small>
+          <LookupFields creating contact={contact} password={password} onContact={setContact} onPassword={setPassword}/>
+          <label htmlFor="order-confirm">确认查询密码</label>
+          <input id="order-confirm" className="shop-player" type="password" autoComplete="new-password" value={confirm}
+            onChange={e=>setConfirm(e.target.value)} minLength={8} maxLength={128} required/>
+          {offer?.channels.map(c=><button key={c} value={c} disabled={busy} className="btn primary">{label[c]}</button>)}
+        </form></>}
+      {busy && <p role="status">{recipient ? "正在准备收银台…" : "正在核验 AquaCore 玩家档案…"}</p>}</section>}
     {error && <p role="alert">{error} {!offer && <button className="btn" onClick={()=>{setError("");retry(n=>n+1);}}>重试</button>}</p>}
   </>;
 }
 
 export function LiveOrders({linked,focus}:{linked?:Link|null;focus?:string}) {
   const [orders,setOrders]=useState<Purchase[]>();
+  const [contact,setContact]=useState("");
+  const [password,setPassword]=useState("");
+  const [unlocked,setUnlocked]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [lookupError,setLookupError]=useState("");
   const [error,setError]=useState("");
   const [revision,refresh]=useState(0);
   const [expanded,expand]=useState<string|null>(focus ?? null);
   useEffect(()=>{
-    if(!linked)return;
     const stop=new AbortController(); let timer:ReturnType<typeof setTimeout>;
     async function update(){
       try{
-        const data=await api<{orders:Purchase[]}>("orders",undefined,stop.signal);
+        const data=await api<{orders:Purchase[];unlocked:boolean}>("orders",undefined,stop.signal);
         if(stop.signal.aborted)return;
-        setOrders(data.orders);setError("");
+        setOrders(data.orders);setUnlocked(data.unlocked);setError("");
         if(data.orders.some(o=>o.status==="pending"||o.status==="paid"))timer=setTimeout(update,3500);
+        else if (data.unlocked) timer=setTimeout(update,60000);
       } catch(e){if(!stop.signal.aborted)setError((e as Error).message);}
     }
     void update(); return ()=>{stop.abort();clearTimeout(timer);};
   },[linked,revision]);
+  async function lookup(close=false) {
+    setBusy(true);setLookupError("");
+    try {
+      await api("order-lookup",close?{close:true}:{contact,password});
+      setPassword("");setOrders(undefined);setUnlocked(!close);
+      if (close) setContact("");
+      refresh(n=>n+1);
+    } catch(e) {setLookupError((e as Error).message);}
+    finally {setBusy(false);}
+  }
   return <><div className="page-intro"><a className="crumb" href="#shop">返回商店</a><h1>我的订单</h1></div>
     {error && <p role="alert">{error} <button className="btn" onClick={()=>refresh(n=>n+1)}>重试</button></p>}
-    {!linked ? linked===null ? <a className="btn" href="#account">绑定账号查看订单</a> : <p>正在读取账号…</p> :
-      !orders ? <p>正在读取订单…</p> : !orders.length ? <p>暂无订单。</p> :
+    {unlocked ? <button className="btn" disabled={busy} onClick={()=>void lookup(true)}>退出订单查询</button> :
+      <form className="panel card vstack" onSubmit={e=>{e.preventDefault();void lookup();}}>
+        <p>输入下单时填写的 QQ 号或邮箱和查询密码，可在任何设备查看对应订单。</p>
+        <LookupFields contact={contact} password={password} onContact={setContact} onPassword={setPassword}/>
+        <button className="btn primary" disabled={busy}>{busy?"正在查询…":"查询订单"}</button>
+      </form>}
+    {lookupError && <p role="alert">{lookupError}</p>}
+    {!unlocked && Boolean(orders?.length) && <h2>历史购买记录</h2>}
+    {!orders ? <p>正在读取订单…</p> : !orders.length ? (unlocked && <p>暂无订单。</p>) :
       <div className="vstack">{orders.map((o,index)=><article key={o.id} className="panel card vstack">
         <h2>{o.sku} · {price(o.amount)}</h2><p>{o.player} · 永久解锁 · {label[o.channel]}</p><strong>{states[o.status]??"待核查"}</strong>
-        {o.status==="paid" && <small>进入 Practice 后可领取，到账后会自动更新。</small>}
+        {o.status==="paid" && <small>正在向收货角色发放，离线也可到账。</small>}
         {o.status==="pending" && <><button className="btn" onClick={()=>expand((expanded??orders[0].id)===o.id?"":o.id)}>付款详情</button>
         {(expanded===o.id || (expanded===null && index===0)) && <Cashier order={o}/>}</>}
         <small>订单 {o.id}</small></article>)}</div>}</>;

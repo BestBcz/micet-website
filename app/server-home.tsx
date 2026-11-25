@@ -142,7 +142,7 @@ export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLa
           <button className="btn primary play-now" type="button" onClick={() => dialog.current?.showModal()}>
             Play Now <span className="play-arrow" aria-hidden="true"><span>→</span></span>
           </button>
-          <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看游戏 Tag" : "查看战绩"}</a>
+          <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看商店" : "查看战绩"}</a>
         </div>
       </div>
       <ServerRow />

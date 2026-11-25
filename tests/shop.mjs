@@ -47,18 +47,29 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
     }});
   t.after(()=>mf.dispose());
   const db=await mf.getD1Database("DB");
+  const legacyUuid=randomUUID();
   for(const file of (await readdir("drizzle")).filter(f=>f.endsWith(".sql")).sort()){
+    if(file.startsWith("0003_")) await db.prepare("INSERT INTO shop_orders(id,uuid,player,sku,amount,channel,status,created_at,next_check) VALUES('legacy',?,'Legacy','Vape',500,'WECHAT_H5','delivered',0,0)").bind(legacyUuid).run();
     for(const sql of (await readFile("drizzle/"+file,"utf8")).split("--> statement-breakpoint").map(v=>v.trim()).filter(Boolean))await db.prepare(sql).run();
   }
+  assert.equal((await db.prepare("SELECT buyer FROM shop_orders WHERE id='legacy'").first()).buyer,"account:"+legacyUuid);
   await db.prepare("INSERT INTO web_sessions VALUES(?,?,?,?)").bind(hash(token),uuid,"Buyer",Date.now()+3600000).run();
   const http=(path,body,headers={})=>mf.dispatchFetch(origin+"/api/"+path,{method:body===undefined?"GET":"POST",
     headers:{Origin:origin,"Content-Type":"application/json",...headers},body:body===undefined?undefined:JSON.stringify(body)});
-  async function json(path,body,headers,status=200){const r=await http(path,body,headers);const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;}
+  const sessions=new WeakMap();
+  async function json(path,body,headers,status=200){
+    const saved=headers && sessions.get(headers);
+    const r=await http(path,body,saved?{...headers,Cookie:[headers.Cookie,saved].filter(Boolean).join("; ")}:headers);
+    const cookie=r.headers.get("Set-Cookie");
+    if(headers && cookie?.startsWith("__Host-micet-lookup=")) sessions.set(headers,cookie.split(";")[0]);
+    const j=await r.json();assert.equal(r.status,status,JSON.stringify(j));return j;
+  }
   const auth={Cookie:"__Host-micet-session="+token,"CF-Connecting-IP":"8.8.8.8"};
   const bridge=(action,body)=>json("bridge/"+action,body,{"X-Micet-Bridge":secret});
-  const poll=async()=> (await bridge("poll",{shop:1})).job;
+  const poll=async()=> (await bridge("poll",{shop:2})).job;
   const receipt=(job,outcome,data=null)=>bridge("receipt",{id:job.id,lease:job.lease,outcome,data});
-  const buy=(sku,status=200)=>json("micet/checkout",{sku,amount:sku==="Vape"?500:600,channel:sku==="Vape"?"WECHAT_H5":"ALIPAY_H5"},auth,status);
+  const buyerKeys={contact:"123456789",password:"example-check-buyer"};
+  const buy=(sku,status=200)=>json("micet/checkout",{...buyerKeys,sku,amount:sku==="Vape"?500:600,channel:sku==="Vape"?"WECHAT_H5":"ALIPAY_H5"},auth,status);
   const orders=async()=>(await json("micet/orders",undefined,auth)).orders;
   async function event(order,type,{id=randomUUID(),amount=order.amount,bad=false,gross=order.amount}={}){
     const ts=now(),nonce=randomUUID(),state=type.split("_")[1];
@@ -68,14 +79,19 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
       "X-XD-Webhook-Key-Id":"provider","X-XD-Webhook-Timestamp":ts,"X-XD-Webhook-Nonce":nonce,
       "X-XD-Webhook-Signature":signLines(["XD-Webhook-v1",id,type,ts,nonce,"provider",hash(data)],bad?merchant.privateKey:provider.privateKey)});
   }
-  assert.equal((await http("micet/orders")).status,401);
+  assert.deepEqual((await json("micet/orders")).orders,[]);
+  const legacyToken="ef".repeat(32);
+  await db.prepare("INSERT INTO web_sessions VALUES(?,?,?,?)").bind(hash(legacyToken),legacyUuid,"Legacy",Date.now()+60000).run();
+  assert.deepEqual((await json("micet/orders",undefined,{Cookie:"__Host-micet-session="+legacyToken})).orders.map(o=>o.id),["legacy"]);
   const back=await mf.dispatchFetch(origin+"/api/payments/return?status=SUCCEEDED",{redirect:"manual"});
   assert.equal(back.status,303);
   assert.equal(new URL(back.headers.get("Location"),origin).hash,"#orders");
   await poll();
   assert((await buy("Vape",202)).checking);
   assert.equal((await bridge("poll",{})).job,null);
-  const check=await poll();assert.equal(check.kind,"tag-check");await receipt(check,"ok",false);
+  assert.equal((await bridge("poll",{shop:1})).job,null);
+  const confirmed={uuid,player:"Buyer",owned:false};
+  const check=await poll();assert.equal(check.kind,"shop-recipient");await receipt(check,"ok",confirmed);
   breakSignature=true;await buy("Vape",401);breakSignature=false;
   const [a,b]=await Promise.all([buy("Vape"),buy("Vape")]);assert.equal(a.order.id,b.order.id);assert.equal(records.size,1);
   const vape=a.order;
@@ -100,9 +116,9 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   assert.equal((await orders())[0].status,"paid");await receipt(next,"ok");
   await event(vape,"PAYMENT_CLOSED",{amount:0});assert.equal((await orders())[0].status,"delivered");
   assert.equal((await event(vape,"REFUND_SUCCEEDED")).status,200);assert.equal((await orders())[0].status,"refund_review");
-  await buy("Heart",202);const heartCheck=await poll();await receipt(heartCheck,"ok",true);await buy("Heart",409);
+  await buy("Heart",202);const heartCheck=await poll();await receipt(heartCheck,"ok",{...confirmed,owned:true});await buy("Heart",409);
   await db.prepare("DELETE FROM bridge_jobs WHERE id=?").bind(heartCheck.id).run();
-  await buy("Heart",202);await receipt(await poll(),"ok",false);const {order:heart}=await buy("Heart");
+  await buy("Heart",202);await receipt(await poll(),"ok",confirmed);const {order:heart}=await buy("Heart");
   assert.equal(heart.qr_url,"https://qr.alipay.com/test");
   await event(heart,"PAYMENT_CLOSED",{amount:0});await event(heart,"PAYMENT_SUCCEEDED");await event(heart,"REFUND_SUCCEEDED");
   assert.equal(await poll(),null);await event(heart,"PAYMENT_SUCCEEDED");
@@ -122,5 +138,58 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   assert.equal(await poll(),null);
   const other="cd".repeat(32);
   await db.prepare("INSERT INTO web_sessions VALUES(?,?,?,?)").bind(hash(other),randomUUID(),"Other",Date.now()+3600000).run();
-  assert.deepEqual((await json("micet/orders",undefined,{Cookie:"__Host-micet-session="+other})).orders,[]);
+  const otherAuth={...auth,Cookie:"__Host-micet-session="+other};
+  assert.deepEqual((await json("micet/orders",undefined,otherAuth)).orders,[]);
+  const lookup={sku:"Heart",player:"fRiEnd"};
+  const firstVisit=await http("micet/recipient",lookup);
+  const cookie=firstVisit.headers.get("Set-Cookie");
+  assert.match(cookie,/HttpOnly/);
+  const guest={...auth,Cookie:cookie.split(";")[0]}, friend=randomUUID();
+  await json("micet/recipient",{...lookup,player:"bad name!"},guest,400);
+  await json("micet/recipient",lookup,guest,202);
+  const lookupJob=await poll();
+  await receipt(lookupJob,"ok",{found:false});
+  await json("micet/recipient",lookup,guest,404);
+  await db.prepare("DELETE FROM bridge_jobs WHERE id=?").bind(lookupJob.id).run();
+  await json("micet/recipient",lookup,guest,202);
+  await receipt(await poll(),"ok",{uuid:friend,player:"Friend",owned:false});
+  assert.deepEqual((await json("micet/recipient",lookup,guest)).recipient,{uuid:friend,player:"Friend"});
+  const guestKeys={contact:"  Gift@Example.COM ",password:"guest-order-secret"};
+  const gift={...lookup,...guestKeys,amount:600,channel:"ALIPAY_H5",recipientUuid:friend};
+  await json("micet/checkout",{...gift,recipientUuid:uuid},guest,409);
+  for(const who of [guest,otherAuth]){
+    await json("micet/checkout",{...gift,password:""},who,400);
+    await json("micet/checkout",{...gift,contact:""},who,400);
+  }
+  const guestOrder=(await json("micet/checkout",gift,guest)).order;
+  await json("micet/checkout",gift,otherAuth,409);
+  assert.deepEqual((await json("micet/orders",undefined,guest)).orders.map(o=>o.id),[guestOrder.id]);
+  assert.deepEqual((await json("micet/orders",undefined,otherAuth)).orders,[]);
+  await event(guestOrder,"PAYMENT_SUCCEEDED");
+  const grant=await poll();assert.equal(grant.payload.uuid,friend);await receipt(grant,"ok");
+  assert.equal((await json("micet/orders",undefined,guest)).orders[0].status,"delivered");
+  const boundGift={...gift,password:"independent-password",sku:"Vape",channel:"WECHAT_H5",amount:500};
+  await json("micet/checkout",boundGift,otherAuth,202);
+  await receipt(await poll(),"ok",{uuid:friend,player:"Friend",owned:false});
+  const loggedOrder=(await json("micet/checkout",boundGift,otherAuth)).order;
+  assert.deepEqual((await json("micet/orders",undefined,otherAuth)).orders.map(o=>o.id),[loggedOrder.id]);
+  assert.deepEqual((await json("micet/orders",undefined,guest)).orders.map(o=>o.id),[guestOrder.id]);
+  assert.deepEqual((await json("micet/orders",undefined,{...guest})).orders,[]);
+  assert.deepEqual((await json("micet/orders",undefined,{...otherAuth})).orders,[]);
+  const phone={"CF-Connecting-IP":"1.1.1.1"};
+  const wrong=await json("micet/order-lookup",{contact:"gift@example.com",password:"wrongpassword"},phone,401);
+  const missing=await json("micet/order-lookup",{contact:"another@example.com",password:"wrongpassword"},phone,401);
+  assert.equal(wrong.error,missing.error);
+  await json("micet/order-lookup",{...guestKeys,contact:"gift@example.com"},phone);
+  assert.deepEqual((await json("micet/orders",undefined,phone)).orders.map(o=>o.id),[guestOrder.id]);
+  const priorTicket=sessions.get(phone);
+  await json("micet/order-lookup",{close:true},phone);
+  assert.deepEqual((await json("micet/orders",undefined,{Cookie:priorTicket})).orders,[]);
+  assert.deepEqual((await json("micet/orders",undefined,phone)).orders,[]);
+  await json("micet/order-lookup",buyerKeys,phone);
+  assert((await json("micet/orders",undefined,phone)).orders.some(o=>o.id===vape.id));
+  await db.prepare("UPDATE shop_lookup_sessions SET expires_at=0").run();
+  assert.deepEqual((await json("micet/orders",undefined,phone)).orders,[]);
+  await db.prepare("UPDATE shop_lookup_limits SET attempts=60").run();
+  await json("micet/order-lookup",buyerKeys,phone,429);
 });

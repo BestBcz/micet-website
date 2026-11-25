@@ -1,11 +1,12 @@
 import { env } from "cloudflare:workers";
-import { checkout, paymentEvent, reconcile, shopCatalog, shopOrders } from "./shop-server";
+import { currentLookup, lookupOrders } from "./shop-lookup";
+import { checkout, paymentEvent, reconcile, resolveRecipient, shopCatalog, shopOrders } from "./shop-server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { demoMatchPattern, getDemoMatchDetail, matchUuidPattern } from "./micet-match-detail";
 import { getServerStatus } from "./micet-server-status";
 import { DEMO_PLAYER, TEST_SKU, demoBoards, getDemoMatches, getDemoProfile, type Link, type Mode, type Order } from "./micet-data";
 import { codeLifetime, codePattern, digest, generateCode, hashCode, json, RequestError } from "./micet-http";
-import { approveSiteLink, confirmSiteLink, endSiteSession, siteSession, startSiteLink } from "./micet-session";
+import { approveSiteLink, confirmSiteLink, endSiteSession, guestShopHash, siteSession, startGuestShop, startSiteLink } from "./micet-session";
 
 type Body = Record<string, unknown>;
 type Job = {
@@ -210,8 +211,11 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
     if (!["status", "result", "orders"].includes(action)) throw new RequestError(404, "找不到页面。");
     const linked = await siteSession(db, request);
     if (action === "status") return json({ mode: "bridge", linked, connected: await linkStatus(db, "bridge") });
+    if (action === "orders") {
+      const guest = await guestShopHash(request);
+      return shopOrders(db, linked ? "account:"+linked.uuid : null, guest ? "guest:"+guest : null, await currentLookup(db,request));
+    }
     if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
-    if (action === "orders") return shopOrders(db, linked.uuid);
     return browserGet(db, action, request, minecraftOwner + linked.uuid, "bridge", linked);
   }
   const origin = env.MICET_SITE_ORIGIN?.trim();
@@ -225,10 +229,17 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
   }
   if (action === "confirm") return confirmSiteLink(db, request);
   if (action === "logout") return endSiteSession(db, request);
-  if (action === "checkout" && body.sku !== TEST_SKU) {
+  if (action === "order-lookup") return lookupOrders(db,request,body);
+  if (action === "recipient" || (action === "checkout" && body.sku !== TEST_SKU)) {
     const linked = await siteSession(db, request);
-    if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
-    return checkout(db, request, body, linked, await linkStatus(db, "bridge"));
+    const guest = linked ? null : await guestShopHash(request);
+    if (!linked && !guest) return startGuestShop(json({checking:true},202));
+    const recipient = await resolveRecipient(db, body.player ?? linked?.player, body.sku, await linkStatus(db, "bridge"));
+    if (!recipient) return json({checking:true},202);
+    if (action === "recipient") return json({recipient});
+    const expected = body.recipientUuid ?? (body.player === undefined ? linked?.uuid : undefined);
+    if (expected !== recipient.uuid) throw new RequestError(409,"收货角色已变化，请重新核对游戏 ID。");
+    return checkout(db, request, body, recipient, linked ? "account:"+linked.uuid : "guest:"+guest);
   }
   if (action !== "stats" || !["matches", "match-detail"].includes(stringField(body, "kind"))) {
     throw new RequestError(404, "找不到页面。");
@@ -318,9 +329,9 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
       db.prepare("UPDATE bridge_jobs SET status='leased',lease=?,lease_until=? WHERE id=(SELECT id FROM bridge_jobs WHERE mode='bridge' "
         + "AND (status='queued' OR (status='leased' AND lease_until<=?)) AND (expires_at IS NULL OR expires_at>?) "
         + "AND ((owner=? OR owner LIKE ?) = ?) AND (?=0 OR kind!='delivery') "
-        + "AND (kind NOT IN ('tag-check','shop-deliver') OR ?=1) "
+        + "AND (kind NOT IN ('tag-check','shop-deliver') OR ?=1) AND (kind!='shop-recipient' OR ?=1) "
         + "ORDER BY CASE WHEN kind='delivery' THEN 0 ELSE 1 END, COALESCE(lease_until,created_at) LIMIT 1) RETURNING *")
-        .bind(lease, now + leaseLifetime, now, now, publicOwner, minecraftOwner + "%", Number(isSelfHosted()), Number(isSelfHosted()), Number(isSelfHosted() && body.shop === 1)),
+        .bind(lease, now + leaseLifetime, now, now, publicOwner, minecraftOwner + "%", Number(isSelfHosted()), Number(isSelfHosted()), Number(isSelfHosted() && (body.shop === 1 || body.shop === 2)), Number(isSelfHosted() && body.shop === 2)),
     ]);
     const job = result.results[0];
     return json({ job: job ? { id: job.id, kind: job.kind, lease: job.lease, payload: JSON.parse(job.payload) } : null });

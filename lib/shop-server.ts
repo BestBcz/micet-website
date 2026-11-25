@@ -1,11 +1,11 @@
 import { env } from "cloudflare:workers";
 import { catalog, type Link } from "./micet-data";
+import { orderLookupKey, unlockOrders } from "./shop-lookup";
 import { json, RequestError } from "./micet-http";
 import { channels, GatewayRejection, paymentUrl, readEvent, xdRequest, type Fields, type XDChannel } from "./xiaodou";
 
 type ShopOrder = { id: string; uuid: string; player: string; sku: string; amount: number; channel: XDChannel;
-  status: string; created_at: number; pay_url: string | null; qr_url: string | null; expires_at: number | null; next_check:number; detail: string | null };
-const active = "('pending','paid','delivered','review')";
+  status: string; created_at: number; pay_url: string | null; qr_url: string | null; expires_at: number | null; next_check:number; detail: string | null; lookup_key: string | null };
 export function products() {
   return catalog.map(tag => {
     const value = tag.name === "Vape" ? env.MICET_PRICE_VAPE_FEN : tag.name === "Heart" ? env.MICET_PRICE_HEART_FEN : undefined;
@@ -18,49 +18,58 @@ const exposed = (o: ShopOrder) => ({ id:o.id, player:o.player, sku:o.sku, amount
   status:o.status, created_at:o.created_at, expires_at:o.expires_at, detail:o.detail,
   pay_url:o.status === "pending" && Number(o.expires_at) > Date.now() ? o.pay_url : null,
   qr_url:o.status === "pending" && Number(o.expires_at) > Date.now() ? o.qr_url : null });
-export async function shopOrders(db: D1Database, uuid: string) {
-  const rows = await db.prepare("SELECT * FROM shop_orders WHERE uuid=? ORDER BY created_at DESC LIMIT 100").bind(uuid).all<ShopOrder>();
-  return json({ orders: rows.results.map(exposed) });
+export async function shopOrders(db: D1Database, account: string | null, guest: string | null, key: string | null) {
+  if (!account && !guest && !key) return json({orders:[],unlocked:false});
+  const rows = key
+    ? await db.prepare("SELECT * FROM shop_orders WHERE lookup_key=? ORDER BY created_at DESC LIMIT 100").bind(key).all<ShopOrder>()
+    : await db.prepare("SELECT * FROM shop_orders WHERE lookup_key IS NULL AND buyer IN (?,?) ORDER BY created_at DESC LIMIT 100")
+        .bind(account,guest).all<ShopOrder>();
+  return json({ orders: rows.results.map(exposed), unlocked:Boolean(key) });
 }
 const merchantOrder = (db: D1Database, id: string) => db.prepare("SELECT * FROM shop_orders WHERE id=?").bind(id).first<ShopOrder>();
-const openOrder = (db: D1Database, uuid: string, sku: string) => db.prepare(
-  "SELECT * FROM shop_orders WHERE uuid=? AND sku=? AND status IN " + active).bind(uuid,sku).first<ShopOrder>();
 
-// One short-lived game lookup per buyer and SKU. Only a signed bridge receipt can authorize checkout.
-export async function checkTag(db: D1Database, link: Link, sku: string) {
-  const id = "tag:" + link.uuid + ":" + sku, now = Date.now();
-  const payload = JSON.stringify({...link, sku});
-  await db.prepare("INSERT INTO bridge_jobs(id,owner,kind,mode,payload,status,created_at,expires_at) VALUES(?,?,'tag-check','bridge',?,'queued',?,?) " +
-    "ON CONFLICT(id) DO UPDATE SET status='queued',created_at=excluded.created_at,expires_at=excluded.expires_at,payload=excluded.payload,result=NULL,lease=NULL,lease_until=NULL WHERE bridge_jobs.expires_at<=?")
-    .bind(id,"minecraft:"+link.uuid,payload,now,now+30_000,now).run();
-  const job = await db.prepare("SELECT status,result FROM bridge_jobs WHERE id=?").bind(id).first<{status:string;result:string|null}>();
-  if (job?.status === "failed") throw new RequestError(503,"游戏服无法核对这个 Tag，请稍后重试。");
-  if (job?.status !== "done") return false;
-  if (job.result === "true") throw new RequestError(409,"你已经拥有这个 Tag。");
-  if (job.result !== "false") throw new RequestError(503,"游戏权益未能核对。");
-  return true;
+export async function resolveRecipient(db: D1Database, player: unknown, sku: unknown, connected: boolean): Promise<Link | null> {
+  if (typeof player !== "string" || !/^[A-Za-z0-9_]{1,16}$/.test(player)) throw new RequestError(400,"请输入 1–16 位游戏 ID，仅限字母、数字和下划线。");
+  if (!products().some(item=>item.name===sku && item.amount)) throw new RequestError(400,"商品尚未开放。");
+  if (!connected) throw new RequestError(503,"游戏服桥接暂时离线，请稍后重试。");
+  const id = "recipient:" + player.toLowerCase() + ":" + sku;
+  const now = Date.now();
+  await db.prepare("INSERT INTO bridge_jobs(id,owner,kind,mode,payload,status,created_at,expires_at) " +
+    "SELECT ?,'minecraft:shop','shop-recipient','bridge',?,'queued',?,? WHERE " +
+    "(SELECT COUNT(*) FROM bridge_jobs WHERE kind='shop-recipient' AND expires_at>? AND status IN ('queued','leased'))<24 " +
+    "ON CONFLICT(id) DO UPDATE SET status='queued',created_at=excluded.created_at,expires_at=excluded.expires_at,result=NULL,lease=NULL,lease_until=NULL WHERE bridge_jobs.expires_at<=?")
+    .bind(id,JSON.stringify({player,sku}),now,now+60_000,now,now).run();
+  const job = await db.prepare("SELECT status,result FROM bridge_jobs WHERE id=? AND expires_at>?").bind(id,now).first<{status:string; result:string|null}>();
+  if (!job) throw new RequestError(429,"游戏服核验繁忙，请稍后再试。");
+  if (job.status==="failed") throw new RequestError(503,"游戏档案核验失败，请稍后再试。");
+  if (job.status!=="done") return null;
+  const result = JSON.parse(job.result ?? "null");
+  if (result?.found===false) throw new RequestError(404,"未找到唯一匹配的 AquaCore 玩家档案，请核对游戏 ID。");
+  if (typeof result?.player!=="string" || result.player.toLowerCase()!==player.toLowerCase() ||
+      !/^[A-Za-z0-9_]{1,16}$/.test(result.player) || typeof result.uuid!=="string" ||
+      !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(result.uuid) || typeof result.owned!=="boolean")
+    throw new RequestError(503,"游戏服未能确认收货角色。");
+  if (result.owned) throw new RequestError(409,"这位玩家已经拥有该商品。");
+  return {uuid:result.uuid.toLowerCase(),player:result.player};
 }
 
-export async function checkout(db: D1Database, request: Request, body: Fields, link: Link, connected: boolean) {
+export async function checkout(db: D1Database, request: Request, body: Fields, link: Link, buyer: string) {
   const item = products().find(i=>i.name===body.sku);
   const channel = body.channel as XDChannel;
-  if (!item || !channels().includes(channel)) throw new RequestError(400,"商品或支付渠道未开放。");
-  let order = await openOrder(db,link.uuid,item.name);
-  if (!order) {
-    const hold = await db.prepare("SELECT id FROM shop_orders WHERE uuid=? AND sku=? AND status IN ('refund_review','duplicate') LIMIT 1")
-      .bind(link.uuid,item.name).first();
-    if (hold) throw new RequestError(409,"该 Tag 有订单待人工核查，请查看我的订单。");
-    if (!item.amount) throw new RequestError(400,"该商品暂未定价。");
-    if (body.amount !== item.amount) throw new RequestError(409,"商品价格已变更，请重新打开商店确认。");
-    if (!connected) throw new RequestError(503,"游戏服暂时离线，无法核对 Tag。");
-    if (!await checkTag(db,link,item.name)) return json({checking:true},202);
-    const now = Date.now();
-    await db.prepare("INSERT OR IGNORE INTO shop_orders(id,uuid,player,sku,amount,channel,status,created_at,next_check) VALUES(?,?,?,?,?,?,'pending',?,?)")
-      .bind("MC"+crypto.randomUUID().replaceAll("-",""),link.uuid,link.player,item.name,item.amount,channel,now,now+60_000).run();
-    order = await openOrder(db,link.uuid,item.name);
-  }
-  if (!order || order.status !== "pending") throw new RequestError(409,"该 Tag 已购买或正在处理中，请查看我的订单。");
-  if (order.pay_url && Number(order.expires_at)>Date.now()) return json({order:exposed(order)});
+  if (!item || !channels().includes(channel) || !item.amount) throw new RequestError(400,"商品或支付渠道未开放。");
+  if (body.amount !== item.amount) throw new RequestError(409,"商品价格已变更，请重新打开商店确认。");
+  const key = await orderLookupKey(db, request, body, true);
+  const now = Date.now();
+  await db.prepare("INSERT OR IGNORE INTO shop_orders(id,uuid,player,sku,amount,channel,status,created_at,next_check,buyer,lookup_key) " +
+    "SELECT ?,?,?,?,?,?,'pending',?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM shop_orders WHERE uuid=? AND sku=? AND status IN ('paid','delivered','review','refund_review','duplicate'))")
+    .bind("MC"+crypto.randomUUID().replaceAll("-",""),link.uuid,link.player,item.name,item.amount,channel,now,now+60_000,buyer,key,link.uuid,item.name).run();
+  const order = await db.prepare("SELECT * FROM shop_orders WHERE buyer=? AND uuid=? AND sku=? AND status='pending'")
+    .bind(buyer,link.uuid,item.name).first<ShopOrder>();
+  if (!order) throw new RequestError(409,"该角色已有此商品或有订单正在处理，请稍后再试。");
+  if (!order.lookup_key) throw new RequestError(409,"已有历史待付订单，请从原购买记录继续。");
+  if (order.lookup_key!==key) throw new RequestError(409,"已有待付订单，请使用下单时的查询账号和密码。");
+  if (order.amount!==item.amount || order.channel!==channel) throw new RequestError(409,"你已为该角色创建过待付订单，请在「我的订单」确认原订单的金额和支付方式。");
+  if (order.pay_url && Number(order.expires_at)>Date.now()) return unlockOrders(db,request,key,json({order:exposed(order)}));
   if (order.expires_at && order.expires_at<=Date.now()) {
     await reconcileOne(db,order);
     throw new RequestError(409,"原支付窗口已到期，请刷新订单状态后再购买。");
@@ -79,7 +88,7 @@ export async function checkout(db: D1Database, request: Request, body: Fields, l
     throw error;
   }
   await acceptSnapshot(db,order,snapshot);
-  return json({order:exposed((await merchantOrder(db,order.id))!)});
+  return unlockOrders(db,request,key,json({order:exposed((await merchantOrder(db,order.id))!)}));
 }
 
 async function applyState(db: D1Database, order: ShopOrder, type: string, amount: number, eventId?: string) {
@@ -89,7 +98,7 @@ async function applyState(db: D1Database, order: ShopOrder, type: string, amount
   if (type === "PAYMENT_SUCCEEDED") {
     if (amount !== order.amount) throw new RequestError(409,"实付金额不匹配。");
     // A late first payment wins over an unpaid replacement. If both settle, only one can grant the Tag.
-    statements.push(db.prepare("UPDATE shop_orders SET status='closed' WHERE id<>? AND uuid=? AND sku=? AND status='pending' AND EXISTS(SELECT 1 FROM shop_orders WHERE id=? AND status IN ('closed','failed'))")
+    statements.push(db.prepare("UPDATE shop_orders SET status='closed' WHERE id<>? AND uuid=? AND sku=? AND status='pending' AND EXISTS(SELECT 1 FROM shop_orders WHERE id=? AND status IN ('pending','closed','failed'))")
       .bind(id,order.uuid,order.sku,id));
     statements.push(db.prepare("UPDATE shop_orders SET status=CASE WHEN EXISTS (SELECT 1 FROM shop_orders s WHERE s.id<>? AND s.uuid=? AND s.sku=? AND s.status IN ('paid','delivered','review','refund_review')) THEN 'duplicate' ELSE 'paid' END WHERE id=? AND status IN ('pending','closed','failed')")
       .bind(id,order.uuid,order.sku,id));
