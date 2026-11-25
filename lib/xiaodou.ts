@@ -16,7 +16,7 @@ function pem(value: string) {
 }
 export function channels(): XDChannel[] {
   if (!env.XD_BASE_URL || !env.XD_APP_ID || !env.XD_KEY_ID || !env.XD_PRIVATE_KEY ||
-      !env.XD_PLATFORM_KEYS || !env.XD_CASHIER_ORIGIN) return [];
+      !env.XD_PLATFORM_KEYS) return [];
   const enabled = env.XD_CHANNELS?.split(",").map(x => x.trim());
   return (["ALIPAY_H5", "WECHAT_H5"] as const).filter(x => enabled?.includes(x));
 }
@@ -89,10 +89,10 @@ export async function readEvent(request: Request) {
 }
 
 export function paymentUrl(value: unknown, origin: string | undefined) {
-  if (typeof value !== "string" || !origin) return null;
+  if (typeof value !== "string" || !/^https:\/\//i.test(value) || /[\s\\]/.test(value)) return null;
   try {
     const url = new URL(value);
-    if (url.protocol === "https:" && url.origin === origin && !url.username && !url.password) return value;
+    if (url.protocol === "https:" && !url.username && !url.password && (!origin || url.origin === origin)) return value;
   } catch { /* Missing or malformed payment material. */ }
   return null;
 }

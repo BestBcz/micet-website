@@ -22,7 +22,7 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   const mf=new Miniflare({modulesRoot:root,modules:[config.main,...files.filter(f=>f!==config.main)].map(f=>({type:"ESModule",path:resolve(root,f)})),
     compatibilityDate:config.compatibility_date,compatibilityFlags:config.compatibility_flags,d1Databases:{DB:"shop"},
     bindings:{MICET_SELF_HOSTED:"1",MICET_SITE_ORIGIN:origin,MICET_BRIDGE_SECRET:secret,MICET_PRICE_VAPE_FEN:"500",MICET_PRICE_HEART_FEN:"600",
-      MICET_RECONCILE_TOKEN:"local-scheduler",XD_CHANNELS:"WECHAT_H5,ALIPAY_H5",XD_BASE_URL:"https://gateway.test",XD_CASHIER_ORIGIN:cash,
+      MICET_RECONCILE_TOKEN:"local-scheduler",XD_CHANNELS:"WECHAT_H5,ALIPAY_H5",XD_BASE_URL:"https://gateway.test",
       XD_APP_ID:"fixture",XD_KEY_ID:"merchant",XD_PRIVATE_KEY:merchant.privateKey,XD_PLATFORM_KEYS:JSON.stringify({provider:provider.publicKey})},
     outboundService:async req=>{
       const h=req.headers, path=new URL(req.url).pathname, body=await req.text(), rid=h.get("X-XD-Request-Id");
@@ -79,6 +79,7 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   breakSignature=true;await buy("Vape",401);breakSignature=false;
   const [a,b]=await Promise.all([buy("Vape"),buy("Vape")]);assert.equal(a.order.id,b.order.id);assert.equal(records.size,1);
   const vape=a.order;
+  assert.equal(vape.pay_url,cash+"/order/"+vape.id);
   assert.equal(vape.qr_url,null);
   assert.equal((await event(vape,"PAYMENT_SUCCEEDED",{bad:true})).status,401);
   assert.equal((await event(vape,"PAYMENT_SUCCEEDED",{gross:1})).status,409);

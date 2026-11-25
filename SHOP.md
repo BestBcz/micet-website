@@ -17,7 +17,9 @@ XD_APP_ID=<应用 ID>
 XD_KEY_ID=<商户签名密钥 ID>
 XD_PRIVATE_KEY='<PKCS8 商户私钥 PEM，可用单行 Base64 正文>'
 XD_PLATFORM_KEYS='{"<平台密钥 ID>":"<平台 SPKI 公钥的单行 Base64 正文>"}'
-XD_CASHIER_ORIGIN=<平台收银链接 payUrl 的 HTTPS 源，例如 https://收银台域名；仅协议和主机，无路径及末尾斜杠>
+# 选填；留空时使用小豆签名下单响应中的 HTTPS 收银地址。
+# 如需限定域名，填已确认的 https://域名，末尾不加斜杠。
+XD_CASHIER_ORIGIN=
 XD_CHANNELS=ALIPAY_H5,WECHAT_H5
 MICET_PRICE_VAPE_FEN=
 MICET_PRICE_HEART_FEN=
