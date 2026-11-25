@@ -7,13 +7,14 @@ import {
 import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
+import { LiveShop, LiveOrders } from "./live-shop";
 import { enterRows } from "./site-motion";
 import { MatchDetailPage } from "./match-detail";
 import serverLogo from "./micet-logo.png?inline";
 import "./micet.css";
 
 type View = "home" | "stats" | "ranking" | "player" | "matches" | "match" | "shop" | "orders" | "account";
-type Route = { view: View; player?: string; matchId?: string; backward?: boolean };
+type Route = { view: View; player?: string; matchId?: string; orderId?: string; backward?: boolean };
 type SiteStatus = { mode: Mode; linked: Link | null; connected: boolean };
 type Code = { code: string; expiresAt: number };
 
@@ -37,7 +38,7 @@ const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
 function parseRoute(publicLaunch: boolean, selfHosted: boolean): Route {
   const [raw, name] = window.location.hash.slice(1).split("/");
   if (publicLaunch) return { view: raw === "shop" ? "shop" : "home" };
-  if (selfHosted && raw === "orders") return { view: "shop" };
+  if (selfHosted && raw === "orders") return { view: "orders", orderId: name };
   if (!views.includes(raw as View)) return { view: "home" };
   if (raw === "match") {
     return name && (demoMatchPattern.test(name) || matchUuidPattern.test(name))
@@ -399,7 +400,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     <header className="site-header"><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><img src={serverLogo} className="brand-logo" width={32} height={32} alt="" /><span>MiCet.cc</span></a>
       <nav aria-label="站点导航" data-backward={route.backward}>{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
-        <a key={key} href={"#" + key} aria-current={navView(view) === key ? "page" : undefined}>{selfHosted && key === "shop" ? "游戏 Tag" : label}</a>)}</nav>
+        <a key={key} href={"#" + key} aria-current={navView(view) === key ? "page" : undefined}>{label}</a>)}</nav>
       {!publicLaunch && <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>}
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
@@ -426,8 +427,9 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
       {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
       {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
-      {view === "shop" && <ShopPage catalogOnly={publicLaunch || selfHosted} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />}
-      {view === "orders" && <OrdersPage mode={mode} focus={orderFocus} />}
+      {view === "shop" && (selfHosted && !publicLaunch ? <LiveShop key={status?.linked?.uuid} linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
+        <ShopPage catalogOnly={publicLaunch} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
+      {view === "orders" && (selfHosted ? <LiveOrders key={status?.linked?.uuid} linked={status?.linked} focus={route.orderId}/> : <OrdersPage mode={mode} focus={orderFocus} />)}
       {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
     </main>
     <footer className="site-footer"><div className="shell footer-row">

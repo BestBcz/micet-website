@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { checkout, paymentEvent, reconcile, shopCatalog, shopOrders } from "./shop-server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { demoMatchPattern, getDemoMatchDetail, matchUuidPattern } from "./micet-match-detail";
 import { getServerStatus } from "./micet-server-status";
@@ -205,10 +206,12 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
   if (request.method !== "POST") {
     if (action === "leaderboard") return publicStats(db, request, "boards");
     if (action === "player") return publicStats(db, request, "profile");
-    if (!["status", "result"].includes(action)) throw new RequestError(404, "找不到页面。");
+    if (action === "shop") return shopCatalog();
+    if (!["status", "result", "orders"].includes(action)) throw new RequestError(404, "找不到页面。");
     const linked = await siteSession(db, request);
     if (action === "status") return json({ mode: "bridge", linked, connected: await linkStatus(db, "bridge") });
     if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
+    if (action === "orders") return shopOrders(db, linked.uuid);
     return browserGet(db, action, request, minecraftOwner + linked.uuid, "bridge", linked);
   }
   const origin = env.MICET_SITE_ORIGIN?.trim();
@@ -222,6 +225,11 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
   }
   if (action === "confirm") return confirmSiteLink(db, request);
   if (action === "logout") return endSiteSession(db, request);
+  if (action === "checkout" && body.sku !== TEST_SKU) {
+    const linked = await siteSession(db, request);
+    if (!linked) throw new RequestError(401, "请先绑定游戏账号。");
+    return checkout(db, request, body, linked, await linkStatus(db, "bridge"));
+  }
   if (action !== "stats" || !["matches", "match-detail"].includes(stringField(body, "kind"))) {
     throw new RequestError(404, "找不到页面。");
   }
@@ -310,8 +318,9 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
       db.prepare("UPDATE bridge_jobs SET status='leased',lease=?,lease_until=? WHERE id=(SELECT id FROM bridge_jobs WHERE mode='bridge' "
         + "AND (status='queued' OR (status='leased' AND lease_until<=?)) AND (expires_at IS NULL OR expires_at>?) "
         + "AND ((owner=? OR owner LIKE ?) = ?) AND (?=0 OR kind!='delivery') "
-        + "ORDER BY CASE WHEN kind='delivery' THEN 0 ELSE 1 END, created_at LIMIT 1) RETURNING *")
-        .bind(lease, now + leaseLifetime, now, now, publicOwner, minecraftOwner + "%", Number(isSelfHosted()), Number(isSelfHosted())),
+        + "AND (kind NOT IN ('tag-check','shop-deliver') OR ?=1) "
+        + "ORDER BY CASE WHEN kind='delivery' THEN 0 ELSE 1 END, COALESCE(lease_until,created_at) LIMIT 1) RETURNING *")
+        .bind(lease, now + leaseLifetime, now, now, publicOwner, minecraftOwner + "%", Number(isSelfHosted()), Number(isSelfHosted()), Number(isSelfHosted() && body.shop === 1)),
     ]);
     const job = result.results[0];
     return json({ job: job ? { id: job.id, kind: job.kind, lease: job.lease, payload: JSON.parse(job.payload) } : null });
@@ -330,7 +339,13 @@ async function bridgePost(db: D1Database, action: string, body: Body) {
     const expiry = job.owner === publicOwner ? now + (outcome === "failed" ? 5000 : job.kind === "boards" ? 60_000 : 30_000) : job.expires_at;
     const complete = db.prepare("UPDATE bridge_jobs SET status=?,result=?,expires_at=? WHERE id=? AND lease=? AND status='leased'")
       .bind(status, JSON.stringify(data), expiry, id, lease);
-    if (job.kind === "delivery") {
+    if (job.kind === "shop-deliver") {
+      await db.batch([
+        db.prepare("UPDATE shop_orders SET status=? WHERE id=? AND status='paid' AND EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND lease=? AND status='leased')")
+          .bind(outcome === "ok" ? "delivered" : "review", id, id, lease),
+        complete,
+      ]);
+    } else if (job.kind === "delivery") {
       await db.batch([
         db.prepare("UPDATE micet_orders SET status=?,detail=?,updated_at=? WHERE id=? AND status='paid' AND mode='bridge' "
           + "AND EXISTS(SELECT 1 FROM bridge_jobs WHERE id=? AND lease=? AND status='leased')")
@@ -351,6 +366,18 @@ export async function micetApi(request: Request, area: string, action: string) {
       return json(await getServerStatus(env.MICET_STATUS_URL));
     }
     if (isPublicLaunch()) throw new RequestError(404, "该功能暂未开放。");
+    if (isSelfHosted() && area === "payments" && action === "return" && request.method === "GET") {
+      return new Response(null, { status: 303, headers: {
+        Location: "/#orders", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+      } });
+    }
+    if (isSelfHosted() && area === "payments" && request.method === "POST") {
+      if (action === "xiaodou") return await paymentEvent(database(), request);
+      if (action === "reconcile" && env.MICET_RECONCILE_TOKEN && request.headers.get("Authorization") === "Bearer " + env.MICET_RECONCILE_TOKEN) {
+        await reconcile(database());
+        return json({ ok: true });
+      }
+    }
     if (area === "bridge" && request.method === "POST") {
       await requireBridge(request);
       return await bridgePost(database(), action, await readBody(request, action === "receipt" ? 1_000_000 : undefined));

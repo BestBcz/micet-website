@@ -1,8 +1,8 @@
 # MiCet.cc
 
-Minecraft PvP website for player profiles, Elo leaderboards, personal match history and cosmetic Tag test checkout.
+Minecraft PvP website for player profiles, Elo leaderboards, personal match history and a cosmetic Tag shop.
 
-The default demo mode uses generated players and simulated receipts. Bridge mode serves responses from the separately maintained game plugin. Both modes use D1 for account links, orders and jobs. Mode-specific records are isolated. The checkout always simulates payment. [MicetSiteBridge repository](https://github.com/BestBcz/MicetSiteBridge)
+The self-hosted shop takes Xiaodou payments and delivers permanent AquaCore Tags through MicetSiteBridge. Demo and private preview checkouts use simulated receipts. Orders and jobs are isolated by mode. [小豆支付上线指南](SHOP.md) · [MicetSiteBridge repository](https://github.com/BestBcz/MicetSiteBridge)
 
 ## Development
 
@@ -38,7 +38,7 @@ This serves the homepage, live MOTD and the Tag catalog. It disables account, st
 
 ### Self-hosted Practice stats and account binding
 
-Start with a separate checkout, local D1 state and HTTPS hostname for staging. Build with Node 24 using `npm run build`. Apply `0000_workable_the_leader.sql` once for a fresh database, then apply the binding migration once.
+Use the existing checkout, D1 state and HTTPS hostname on the VPS. The staging hostname and port below are examples for a separate installation. Build with Node 24 using `npm run build`. Apply `0000_workable_the_leader.sql` once for a fresh database, then apply the binding migration once.
 
 ```sh
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_website_binding.sql
@@ -79,9 +79,9 @@ trust-forwarded-identity: false
 
 For offline-mode Bukkit backends, enable `trust-forwarded-identity` only after confirming the backend is reachable exclusively through a proxy that authenticates every player and forwards their verified UUID.
 
-Compare two players' Elo and wins with the in-game leaderboard. Generate a code on the site, run `/micetlink <code>` in Practice, then select **完成绑定** in the originating browser. Verify that a second account cannot read the first account's match. Public rankings and profiles use live bridge data with a short cache. The self-hosted mode disables checkout and delivery.
+Compare two players' Elo and wins with the in-game leaderboard. Generate a code on the site, run `/micetlink <code>` in Practice, then select **完成绑定** in the originating browser. Verify that a second account cannot read the first account's match. Public rankings and profiles use live bridge data with a short cache. For live checkout, apply migration 0002 and configure the shop and bridge using the [deployment guide](SHOP.md).
 
-After building, run `node --test tests/self-hosted.mjs`. It starts an isolated local Worker, applies both migrations and simulates game bridge requests.
+After building, run `node --test tests/self-hosted.mjs tests/shop.mjs`. The tests use isolated local Workers and D1 databases, signed payment fixtures and simulated game bridge requests.
 
 The production build targets a Sites-hosted Worker with a D1 `DB` binding. Register your own Sites project when deploying this checkout and store configuration values as runtime variables.
 

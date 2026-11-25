@@ -1,4 +1,19 @@
 import { integer, sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+
+export const shopOrders = sqliteTable("shop_orders", {
+  id: text().primaryKey(), uuid: text().notNull(), player: text().notNull(), sku: text().notNull(),
+  amount: integer().notNull(), channel: text().notNull(), status: text().notNull(),
+  pay_url: text(), qr_url: text(), expires_at: integer(), next_check: integer().notNull(),
+  created_at: integer().notNull(), detail: text(),
+}, table => [
+  uniqueIndex("shop_open_product").on(table.uuid, table.sku).where(sql`status IN ('pending','paid','delivered','review')`),
+  index("shop_due").on(table.next_check),
+]);
+export const shopEvents = sqliteTable("shop_events", {
+  id: text().primaryKey(), order_id: text().notNull(), kind: text().notNull(), amount: integer().notNull(),
+  created_at: integer().notNull(),
+});
 
 export const links = sqliteTable("links", {
   owner: text().notNull(),

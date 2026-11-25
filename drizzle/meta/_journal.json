@@ -15,6 +15,13 @@
       "when": 1795511199572,
       "tag": "0001_website_binding",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1795575144199,
+      "tag": "0002_xiaodou_shop",
+      "breakpoints": true
     }
   ]
 }
