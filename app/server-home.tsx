@@ -1,7 +1,7 @@
 "use client";
 
-import { useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { MotionEnabled } from "./site-motion";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useSiteMotion } from "./site-motion";
 import { api } from "@/lib/micet-client";
 import { SERVER_ADDRESS, type ServerStatus } from "@/lib/micet-server-status";
 import "./server-home.css";
@@ -14,7 +14,7 @@ const colorCodes: Record<string, string> = {
 };
 
 function ObfuscatedText({ text }: { text: string }) {
-  const enabled = useContext(MotionEnabled);
+  const enabled = useSiteMotion();
   const [display, setDisplay] = useState(text);
   useEffect(() => {
     if (!enabled) return;
@@ -140,7 +140,7 @@ export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLa
         {!publicLaunch && <p className="server-description">查看你在服务器的每场战绩。</p>}
         <div className="server-actions">
           <button className="btn primary play-now" type="button" onClick={() => dialog.current?.showModal()}>
-            Play Now <span className="play-arrow" aria-hidden="true">→</span>
+            Play Now <span className="play-arrow" aria-hidden="true"><span>→</span></span>
           </button>
           <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看游戏 Tag" : "查看战绩"}</a>
         </div>

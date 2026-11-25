@@ -7,19 +7,28 @@ import {
 import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
-import { MotionEnabled, useSiteMotion } from "./site-motion";
+import { enterRows } from "./site-motion";
 import { MatchDetailPage } from "./match-detail";
 import serverLogo from "./micet-logo.png?inline";
 import "./micet.css";
 
 type View = "home" | "stats" | "ranking" | "player" | "matches" | "match" | "shop" | "orders" | "account";
-type Route = { view: View; player?: string; matchId?: string };
+type Route = { view: View; player?: string; matchId?: string; backward?: boolean };
 type SiteStatus = { mode: Mode; linked: Link | null; connected: boolean };
 type Code = { code: string; expiresAt: number };
 
 const views: View[] = ["home", "stats", "ranking", "player", "matches", "match", "shop", "orders", "account"];
 const menu: Array<[View, string]> = [["home", "首页"], ["stats", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "Tag 商店"]];
 const publicMenu: Array<[View, string]> = [["home", "首页"], ["shop", "游戏 Tag"]];
+function navView(view: View) {
+  if (view === "player") return "stats";
+  if (view === "match") return "matches";
+  return view;
+}
+
+function rowDelay(index: number) {
+  return { "--row-delay": Math.min(index, 7) * 35 + "ms" } as CSSProperties;
+}
 const formatNumber = (value: number | null) => value === null ? "—" : value.toLocaleString("en-US");
 const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -112,6 +121,7 @@ function Message({ children, error = false }: { children: ReactNode; error?: boo
 function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: boolean; side?: boolean }) {
   const [boards, setBoards] = useState<Board[]>(mode === "demo" ? demoBoards : []);
   const [selected, setSelected] = useState("global");
+  const [backward, setBackward] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -126,14 +136,18 @@ function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: b
     {side && <div className="section-title"><div><h2 id="rank-heading">Elo 排行榜</h2><p>按玩法查看 MiCet 排位高手。</p></div>{!selfHosted && <span className="note">{mode === "demo" ? "示例排名" : "测试服"}</span>}</div>}
     <div className={side ? "score-layout" : ""}>
       <div className="panel">
-        {boards.length > 0 && <div className="pills" aria-label="玩法">{boards.map(item =>
-          <button type="button" key={item.id} className="pill" aria-pressed={board?.id === item.id} onClick={() => setSelected(item.id)}>{item.name}</button>)}</div>}
+        {boards.length > 0 && <div className="pills" aria-label="玩法" data-backward={backward}>{boards.map((item, index) =>
+          <button type="button" key={item.id} className="pill" aria-pressed={board?.id === item.id} onClick={() => {
+            if (board === item) return;
+            setBackward(index < boards.indexOf(board));
+            setSelected(item.id);
+          }}>{item.name}</button>)}</div>}
         {error ? <Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
           : !board ? <Message>正在查询排行榜…</Message>
           : board.entries.length === 0 ? <Message>这个玩法暂无排位数据。</Message>
           : <table aria-label={board.name + " Elo 排行"}>
             <thead><tr><th scope="col">排名</th><th scope="col">玩家</th><th scope="col">Elo</th></tr></thead>
-            <tbody>{board.entries.map((item, index) => <tr key={item.uuid}>
+            <tbody key={board.id} ref={enterRows}>{board.entries.map((item, index) => <tr key={item.uuid} data-entry-row="" style={rowDelay(index)}>
               <td className="rank">#{index + 1}</td>
               <td><a className="player" href={"#player/" + item.player}><Avatar name={item.player} uuid={item.uuid} /><span>{item.player}</span></a></td>
               <td className="elo">{formatNumber(item.elo)}</td>
@@ -176,8 +190,8 @@ function ProfilePage({ name, mode, selfHosted }: { name: string; mode: Mode; sel
           <h3 className="detail-title">各玩法战绩</h3>
           {profile.scores.length > 1 ? <table className="stats">
             <thead><tr><th scope="col">玩法</th><th scope="col">Elo</th><th scope="col">胜</th><th scope="col">负</th><th scope="col">胜率</th></tr></thead>
-            <tbody>{profile.scores.filter(row => row.id !== "global").map(row =>
-              <tr key={row.id}><td className="kit-name">{row.name}</td><td className="elo">{formatNumber(row.elo)}</td><td>{row.wins}</td><td>{row.losses}</td><td>{rate(row.wins, row.losses)}</td></tr>)}</tbody>
+            <tbody ref={enterRows}>{profile.scores.filter(row => row.id !== "global").map((row, index) =>
+              <tr key={row.id} data-entry-row="" style={rowDelay(index)}><td className="kit-name">{row.name}</td><td className="elo">{formatNumber(row.elo)}</td><td>{row.wins}</td><td>{row.losses}</td><td>{rate(row.wins, row.losses)}</td></tr>)}</tbody>
           </table> : <Message>暂无分玩法战绩。</Message>}
         </div>
       </>}
@@ -204,10 +218,10 @@ function MatchesPage({ linked }: { linked: Link | null | undefined }) {
         : error ? <Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
         : !matches ? <Message>正在查询近期对局…</Message>
         : matches.length === 0 ? <Message>最近 7 天暂无可查看的对局。</Message>
-        : matches.map(match => <a key={match.id} className="list-row match-link" href={"#match/" + match.id}>
+        : <div ref={enterRows}>{matches.map((match, index) => <a key={match.id} className="list-row match-link" data-entry-row="" style={rowDelay(index)} href={"#match/" + match.id}>
           <div><strong>{match.kit} · {match.opponents.length ? match.opponents.join(" / ") : "未知对手"}</strong><small>{match.ranked ? "排位" : "非排位"} · {formatDate(match.endedAt)}</small></div>
           <div className={"result " + match.result}>{labels[match.result]}{match.delta !== null && <div>{match.delta > 0 ? "+" : ""}{match.delta} Elo</div>}<span className="match-link-label">查看详情</span></div>
-        </a>)}
+        </a>)}</div>}
     </div>
   </>;
 }
@@ -345,7 +359,6 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
 }
 
 export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publicLaunch: boolean; selfHosted: boolean }) {
-  const motion = useSiteMotion();
   const [route, setRoute] = useState<Route>({ view: "home" });
   const [status, setStatus] = useState<SiteStatus>();
   const [statusError, setStatusError] = useState("");
@@ -356,7 +369,12 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     catch (err) { setStatusError((err as Error).message); throw err; }
   }
   useEffect(() => {
-    const update = () => { setRoute(parseRoute(publicLaunch, selfHosted)); window.scrollTo(0, 0); };
+    const update = () => {
+      const next = parseRoute(publicLaunch, selfHosted);
+      const position = (view: View) => menu.findIndex(([key]) => key === navView(view));
+      setRoute(previous => ({ ...next, backward: position(next.view) < position(previous.view) }));
+      window.scrollTo(0, 0);
+    };
     const navigate = () => { update(); main.current?.focus({ preventScroll: true }); };
     update();
     window.addEventListener("hashchange", navigate);
@@ -372,7 +390,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     return () => stop.abort();
   }, [publicLaunch]);
   const view = route.view;
-  return <MotionEnabled.Provider value={motion.enabled}><div data-motion={motion.enabled ? "on" : "reduce"}>
+  return <>
     <a className="skip-link" href="#main" onClick={event => {
       event.preventDefault();
       main.current?.focus();
@@ -380,8 +398,8 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     }}>跳到主要内容</a>
     <header className="site-header"><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><img src={serverLogo} className="brand-logo" width={32} height={32} alt="" /><span>MiCet.cc</span></a>
-      <nav aria-label="站点导航">{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
-        <a key={key} href={"#" + key} aria-current={view === key || (key === "stats" && view === "player") || (key === "matches" && view === "match") ? "page" : undefined}>{selfHosted && key === "shop" ? "游戏 Tag" : label}</a>)}</nav>
+      <nav aria-label="站点导航" data-backward={route.backward}>{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
+        <a key={key} href={"#" + key} aria-current={navView(view) === key ? "page" : undefined}>{selfHosted && key === "shop" ? "游戏 Tag" : label}</a>)}</nav>
       {!publicLaunch && <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>}
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
@@ -414,12 +432,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     </main>
     <footer className="site-footer"><div className="shell footer-row">
       <span><strong>MiCet.cc</strong> · 1.7-1.8 Practice Server</span>
-      <label className="motion-control">动效
-        <select value={motion.preference} onChange={event => motion.setPreference(event.target.value)}>
-          <option value="system">跟随系统</option><option value="on">开启</option><option value="reduce">减少</option>
-        </select>
-      </label>
       {!publicLaunch && !selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
     </div></footer>
-  </div></MotionEnabled.Provider>;
+  </>;
 }

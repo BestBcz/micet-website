@@ -170,7 +170,6 @@ nav a:hover, .brand:hover { color: var(--color-accent); }
 }
 .btn.primary:hover:not(:disabled) { font-variation-settings: "wght" 900; }
 .btn.primary:hover:not(:disabled)::before { opacity: .08; }
-[data-motion="on"] .btn.primary:active:not(:disabled) { transform: scale(.98); }
 .btn:disabled, .btn.primary:disabled {
   background: var(--color-quiet);
   color: var(--color-muted-grey);
@@ -497,20 +496,9 @@ table.stats .elo { white-space: normal; }
 .footer-row strong { color: var(--color-bone); }
 .footer-row a { display: inline-flex; align-items: center; min-height: 2.75rem; }
 .footer-row a:hover { color: var(--color-accent); }
-.motion-control { display: inline-flex; align-items: center; gap: .5rem; }
-.motion-control select {
-  min-height: 2.75rem;
-  padding-inline: .6rem;
-  color: var(--color-bone);
-  background: var(--color-panel);
-  border: 1px solid var(--color-control-border);
-  border-radius: var(--radius);
-  font: inherit;
-}
-
 @keyframes letter-arrive {
-  from { opacity: 0; transform: translateY(110%); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translate(var(--letter-x, 0), 110%) skewX(var(--letter-skew, 0deg)); }
+  to { opacity: 1; transform: none; }
 }
 @keyframes accent-weight {
   from { font-variation-settings: "wght" 450; }
@@ -520,24 +508,40 @@ table.stats .elo { white-space: normal; }
   from { transform: scaleX(0); }
   to { transform: scaleX(1); }
 }
-[data-motion="on"] .hero-title[data-entered="true"] .title-letter {
-  animation: letter-arrive .8s var(--expo-out) var(--letter-delay) backwards;
+@keyframes row-arrive {
+  from { opacity: .35; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
 }
-/* The underlying bold glyph reserves its final width while the overlay changes weight. */
-[data-motion="on"] .server-title[data-entered="true"] [data-glyph] { position: relative; color: transparent; }
-[data-motion="on"] .server-title[data-entered="true"] [data-glyph]::after {
-  position: absolute;
-  inset: 0;
-  color: var(--color-accent);
-  content: attr(data-glyph);
-  animation: accent-weight .8s var(--expo-out) var(--letter-delay) backwards;
+@media (prefers-reduced-motion: no-preference) {
+  .hero-title[data-entered="true"] .title-letter {
+    animation: letter-arrive .8s var(--expo-out) var(--letter-delay) backwards;
+  }
+  .server-title { --letter-skew: -10deg; }
+  .server-title .title-accent { --letter-x: .32em; }
+  /* Reserve each bold glyph's final width while its overlay changes weight. */
+  .server-title[data-entered="true"] [data-glyph] { position: relative; color: transparent; }
+  .server-title[data-entered="true"] [data-glyph]::after {
+    position: absolute;
+    inset: 0;
+    color: var(--color-accent);
+    content: attr(data-glyph);
+    animation: accent-weight .8s var(--expo-out) var(--letter-delay) backwards;
+  }
+  nav a[aria-current="page"]::after, .pills .pill[aria-pressed="true"]::after {
+    animation: selection-line .3s var(--expo-out);
+  }
+  nav[data-backward="true"] a::after, .pills[data-backward="true"] .pill::after { transform-origin: right; }
+  [data-row-entry="waiting"] > [data-entry-row=""]:not(:focus-within) > * {
+    opacity: .35;
+    transform: translateY(12px);
+  }
+  [data-row-entry="playing"] > [data-entry-row=""]:not(:focus-within) > * {
+    animation: row-arrive 320ms var(--expo-out) var(--row-delay) backwards;
+  }
+  .btn.primary { transition: transform .3s var(--expo-out), font-variation-settings .4s var(--expo-out); }
+  .btn.primary:active:not(:disabled) { transform: scale(.98); }
+  .btn.primary::before { transition: opacity .4s var(--expo-out); }
 }
-[data-motion="on"] nav a[aria-current="page"]::after,
-[data-motion="on"] .pills .pill[aria-pressed="true"]::after {
-  animation: selection-line .3s var(--expo-out);
-}
-[data-motion="on"] .btn.primary { transition: transform .3s var(--expo-out), font-variation-settings .4s var(--expo-out); }
-[data-motion="on"] .btn.primary::before { transition: opacity .4s var(--expo-out); }
 
 @media (max-width: 880px) {
   :root { --gutter: var(--spacing-24); }

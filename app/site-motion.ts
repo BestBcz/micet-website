@@ -1,43 +1,6 @@
 "use client";
 
-import { createContext, useSyncExternalStore } from "react";
-
-type Preference = "system" | "on" | "reduce";
-const storageKey = "micet.motion";
-let temporaryPreference: Preference | undefined;
-export const MotionEnabled = createContext(false);
-
-function readPreference(): Preference {
-  if (temporaryPreference) return temporaryPreference;
-  try {
-    const stored = localStorage.getItem(storageKey);
-    if (stored === "on" || stored === "reduce") return stored;
-  } catch { /* Storage may be unavailable in a private window. */ }
-  return "system";
-}
-
-function subscribePreference(update: () => void) {
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === storageKey || event.key === null) update();
-  };
-  window.addEventListener("micet-motion", update);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener("micet-motion", update);
-    window.removeEventListener("storage", onStorage);
-  };
-}
-
-function setPreference(value: string) {
-  if (value !== "system" && value !== "on" && value !== "reduce") return;
-  try {
-    localStorage.setItem(storageKey, value);
-    temporaryPreference = undefined;
-  } catch {
-    temporaryPreference = value;
-  }
-  window.dispatchEvent(new Event("micet-motion"));
-}
+import { useSyncExternalStore } from "react";
 
 const systemMotion = () => window.matchMedia("(prefers-reduced-motion: no-preference)");
 function subscribeSystem(update: () => void) {
@@ -47,7 +10,37 @@ function subscribeSystem(update: () => void) {
 }
 
 export function useSiteMotion() {
-  const preference = useSyncExternalStore(subscribePreference, readPreference, (): Preference => "system");
-  const systemEnabled = useSyncExternalStore(subscribeSystem, () => systemMotion().matches, () => false);
-  return { preference, setPreference, enabled: preference === "on" || (preference === "system" && systemEnabled) };
+  return useSyncExternalStore(subscribeSystem, () => systemMotion().matches, () => false);
+}
+
+// A keyed list gets one entrance. Animate its columns so each link keeps its full hit area.
+export function enterRows(group: HTMLElement | null) {
+  if (!group || !systemMotion().matches || !("IntersectionObserver" in window)) return;
+  const motion = systemMotion();
+  let endTimer: number | undefined;
+  group.dataset.rowEntry = "waiting";
+  const observer = new IntersectionObserver(([entry]) => {
+    if (!entry.isIntersecting) return;
+    group.dataset.rowEntry = "playing";
+    observer.disconnect();
+    endTimer = window.setTimeout(finish, 320 + 7 * 35);
+  });
+  observer.observe(group);
+
+  const finishFocusedRow = (event: FocusEvent) => {
+    const row = event.target instanceof Element && event.target.closest<HTMLElement>("[data-entry-row]");
+    if (row) row.dataset.entryRow = "done";
+  };
+  const finish = () => {
+    observer.disconnect();
+    window.clearTimeout(endTimer);
+    delete group.dataset.rowEntry;
+  };
+  group.addEventListener("focusin", finishFocusedRow);
+  motion.addEventListener("change", finish);
+  return () => {
+    finish();
+    group.removeEventListener("focusin", finishFocusedRow);
+    motion.removeEventListener("change", finish);
+  };
 }
