@@ -8,7 +8,8 @@ import { api, readPublicStats, readStats } from "@/lib/micet-client";
 import { demoMatchPattern, matchUuidPattern } from "@/lib/micet-match-detail";
 import { ServerHome } from "./server-home";
 import { LiveShop, LiveOrders } from "./live-shop";
-import { enterRows } from "./site-motion";
+import { enterRows, useSlidingIndicator } from "./site-motion";
+import { AnimatedNumber } from "./animated-number";
 import { MatchDetailPage } from "./match-detail";
 import serverLogo from "./micet-logo.png?inline";
 import "./micet.css";
@@ -27,7 +28,7 @@ function navView(view: View) {
 }
 
 function rowDelay(index: number) {
-  return { "--row-delay": Math.min(index, 7) * 35 + "ms" } as CSSProperties;
+  return { "--row-delay": Math.min(index, 9) * 28 + "ms" } as CSSProperties;
 }
 const formatNumber = (value: number | null) => value === null ? "—" : value.toLocaleString("en-US");
 const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
@@ -54,6 +55,18 @@ function Avatar({ name, uuid }: { name: string; uuid?: string }) {
     ? <img src={`https://mc-heads.net/avatar/${uuid}/48`} width={48} height={48} alt="" loading="lazy"
       referrerPolicy="no-referrer" onError={() => setFailedUuid(uuid)} />
     : name.slice(0, 1).toUpperCase()}</span>;
+}
+
+function TableSkeleton({ rows = 6, label = "正在加载…" }: { rows?: number; label?: string }) {
+  return <div className="skeleton-wrap" role="status" aria-label={label}>
+    {Array.from({ length: rows }, (_, i) => (
+      <div className="skeleton-row" key={i}>
+        <span className="skeleton-bar" />
+        <span className={"skeleton-bar" + (i % 2 === 1 ? " short" : "")} />
+        <span className="skeleton-bar" />
+      </div>
+    ))}
+  </div>;
 }
 
 function HeroTitle({ home = false }: { home?: boolean }) {
@@ -120,7 +133,6 @@ function Message({ children, error = false }: { children: ReactNode; error?: boo
 function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: boolean; side?: boolean }) {
   const [boards, setBoards] = useState<Board[]>(mode === "demo" ? demoBoards : []);
   const [selected, setSelected] = useState("global");
-  const [backward, setBackward] = useState(false);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
@@ -130,32 +142,66 @@ function Ranking({ mode, selfHosted, side = false }: { mode: Mode; selfHosted: b
     load.then(setBoards).catch(err => { if (!stop.signal.aborted) setError(err.message); });
     return () => stop.abort();
   }, [mode, retry, selfHosted]);
+
   const board = boards.find(item => item.id === selected) ?? boards[0];
+  const pillsRef = useSlidingIndicator<HTMLDivElement>(board?.id, 8);
+  const topElo = board?.entries[0]?.elo ?? 0;
+  const minElo = board?.entries.at(-1)?.elo ?? 0;
+  const spread = Math.max(1, topElo - minElo);
+
   return <section className="section" aria-label={side ? undefined : "Elo 排行榜"} aria-labelledby={side ? "rank-heading" : undefined}>
     {side && <div className="section-title"><div><h2 id="rank-heading">Elo 排行榜</h2><p>按玩法查看 MiCet 排位高手。</p></div>{!selfHosted && <span className="note">{mode === "demo" ? "示例排名" : "测试服"}</span>}</div>}
     <div className={side ? "score-layout" : ""}>
       <div className="panel">
-        {boards.length > 0 && <div className="pills" aria-label="玩法" data-backward={backward}>{boards.map((item, index) =>
-          <button type="button" key={item.id} className="pill" aria-pressed={board?.id === item.id} onClick={() => {
-            if (board === item) return;
-            setBackward(index < boards.indexOf(board));
-            setSelected(item.id);
-          }}>{item.name}</button>)}</div>}
-        {error ? <Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
-          : !board ? <Message>正在查询排行榜…</Message>
+        {boards.length > 0 && <div className="pills" ref={pillsRef} aria-label="玩法">
+          {boards.map(item =>
+            <button type="button" key={item.id} className="pill" aria-pressed={board?.id === item.id} onClick={() => {
+              if (board === item) return;
+              setSelected(item.id);
+            }}>{item.name}</button>)}
+          <span className="sliding-beam" aria-hidden="true" />
+        </div>}
+        {error ? <Message error>{error} <button className="btn compact" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
+          : !board ? <TableSkeleton rows={6} label="正在查询排行榜" />
           : board.entries.length === 0 ? <Message>这个玩法暂无排位数据。</Message>
           : <table aria-label={board.name + " Elo 排行"}>
             <thead><tr><th scope="col">排名</th><th scope="col">玩家</th><th scope="col">Elo</th></tr></thead>
-            <tbody key={board.id} ref={enterRows}>{board.entries.map((item, index) => <tr key={item.uuid} data-entry-row="" style={rowDelay(index)}>
-              <td className="rank">#{index + 1}</td>
-              <td><a className="player" href={"#player/" + item.player}><Avatar name={item.player} uuid={item.uuid} /><span>{item.player}</span></a></td>
-              <td className="elo">{formatNumber(item.elo)}</td>
-            </tr>)}</tbody>
+            <tbody key={board.id} ref={enterRows}>{board.entries.map((item, index) => {
+              const barPct = topElo === minElo ? 100 : Math.round(28 + ((item.elo - minElo) / spread) * 72);
+              return <tr key={item.uuid} className={index < 3 ? "rank-row-" + (index + 1) : undefined} data-entry-row="" style={rowDelay(index)}>
+                <td className="rank">
+                  <span className={index < 3 ? "rank-badge top-" + (index + 1) : "rank-badge"}>#{index + 1}</span>
+                </td>
+                <td>
+                  <a className="player" href={"#player/" + item.player}>
+                    <Avatar name={item.player} uuid={item.uuid} />
+                    <span>{item.player}</span>
+                    <span className="player-go" aria-hidden="true">→</span>
+                  </a>
+                </td>
+                <td>
+                  <div className="elo-cell">
+                    <span className="elo">{formatNumber(item.elo)}</span>
+                    <span className="elo-bar" aria-hidden="true">
+                      <span style={{ "--bar-pct": barPct + "%", "--row-delay": Math.min(index, 9) * 28 + "ms" } as CSSProperties} />
+                    </span>
+                  </div>
+                </td>
+              </tr>;
+            })}</tbody>
           </table>}
       </div>
       {side && <aside className="side">
-        <div className="panel side-panel"><h3>我的对局</h3><p>绑定 Minecraft 账号，查看最近比赛和 Elo 变化。</p><a href="#matches">查看对局</a></div>
-        <div className="panel side-panel"><h3>游戏内 Tag</h3><p>{selfHosted ? "查看 MiCet 游戏内标签。" : "浏览装饰标签，体验站内测试结账。"}</p><a href="#shop">{selfHosted ? "查看标签" : "浏览商店"}</a></div>
+        <div className="panel side-panel">
+          <h3>我的对局</h3>
+          <p>绑定 Minecraft 账号，查看最近比赛、背包快照与 Elo 变化。</p>
+          <a href="#matches">查看对局 <span className="link-arrow" aria-hidden="true">→</span></a>
+        </div>
+        <div className="panel side-panel">
+          <h3>游戏内 Tag</h3>
+          <p>{selfHosted ? "查看 MiCet 游戏内装饰称号与实时聊天效果。" : "浏览装饰标签，体验站内测试结账。"}</p>
+          <a href="#shop">{selfHosted ? "查看标签" : "浏览商店"} <span className="link-arrow" aria-hidden="true">→</span></a>
+        </div>
       </aside>}
     </div>
   </section>;
@@ -165,6 +211,8 @@ function ProfilePage({ name, mode, selfHosted }: { name: string; mode: Mode; sel
   const [profile, setProfile] = useState<Profile | null | undefined>(undefined);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [copiedLink, setCopiedLink] = useState(false);
+
   useEffect(() => {
     const stop = new AbortController();
     const load = selfHosted ? readPublicStats<Profile | null>("player?name=" + encodeURIComponent(name), stop.signal)
@@ -172,25 +220,96 @@ function ProfilePage({ name, mode, selfHosted }: { name: string; mode: Mode; sel
     load.then(setProfile).catch(err => { if (!stop.signal.aborted) setError(err.message); });
     return () => stop.abort();
   }, [name, retry, selfHosted]);
+
   const global = profile?.scores.find(score => score.id === "global");
-  const rate = (wins: number, losses: number) => wins + losses > 0 ? Math.round(wins / (wins + losses) * 100) + "%" : "—";
+  const kits = profile ? profile.scores.filter(row => row.id !== "global") : [];
+  const bestKit = kits.reduce<Profile["scores"][number] | null>((best, row) => {
+    if (row.elo === null) return best;
+    if (!best || (best.elo ?? -Infinity) < row.elo) return row;
+    return best;
+  }, null);
+  const rateNum = (wins: number, losses: number) => wins + losses > 0 ? Math.round(wins / (wins + losses) * 100) : null;
+  const rateText = (wins: number, losses: number) => {
+    const r = rateNum(wins, losses);
+    return r === null ? "—" : r + "%";
+  };
+
+  async function shareProfile() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopiedLink(true);
+      window.setTimeout(() => setCopiedLink(false), 1800);
+    } catch {
+      setCopiedLink(false);
+    }
+  }
+
+  const globalRate = global ? rateNum(global.wins, global.losses) : null;
+
   return <>
     <PageIntro name="玩家战绩"><Search initial={name} /></PageIntro>
-    {error ? <div className="panel"><Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message></div>
-      : profile === undefined ? <div className="panel"><Message>正在查找 {name}…</Message></div>
+    {error ? <div className="panel"><Message error>{error} <button className="btn compact" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message></div>
+      : profile === undefined ? <div className="panel"><TableSkeleton rows={5} label={"正在查找 " + name} /></div>
       : profile === null ? <div className="panel"><Message>找不到玩家 {name}。请核对游戏名后再试。</Message></div>
       : <>
-        <div className="panel stat-banner"><Avatar name={profile.player} uuid={profile.uuid} /><div><p className="label">{mode === "demo" ? "示例玩家" : "MiCet 玩家"}</p><h2>{profile.player}</h2></div></div>
+        <div className="panel stat-banner">
+          <div className="stat-banner-id">
+            <div className="avatar-framed"><Avatar name={profile.player} uuid={profile.uuid} /></div>
+            <div className="stat-banner-meta">
+              <p className="label">{mode === "demo" ? "示例玩家" : "MiCet 玩家"}</p>
+              <h2>{profile.player}</h2>
+              <div className="stat-tags">
+                {global && <span className="stat-tag">总场次 <strong>{formatNumber(global.wins + global.losses)}</strong></span>}
+                {bestKit && bestKit.elo !== null && <span className="stat-tag">最强玩法 <strong>{bestKit.name} · {formatNumber(bestKit.elo)}</strong></span>}
+              </div>
+            </div>
+          </div>
+          <button type="button" className="btn compact" onClick={() => void shareProfile()}>
+            {copiedLink ? "✓ 已复制链接" : "分享战绩页"}
+          </button>
+        </div>
+
         {global && <div className="score-cards">
-          {[["综合 Elo", formatNumber(global.elo)], ["胜场", formatNumber(global.wins)], ["败场", formatNumber(global.losses)], ["胜率", rate(global.wins, global.losses)]].map(([label, value]) =>
-            <div className="panel score-card" key={label}><span className="label">{label}</span><strong>{value}</strong></div>)}
+          <div className="panel score-card accent">
+            <span className="label">综合 Elo</span>
+            <strong><AnimatedNumber value={global.elo} /></strong>
+          </div>
+          <div className="panel score-card">
+            <span className="label">胜场</span>
+            <strong><AnimatedNumber value={global.wins} /></strong>
+          </div>
+          <div className="panel score-card">
+            <span className="label">败场</span>
+            <strong><AnimatedNumber value={global.losses} /></strong>
+          </div>
+          <div className="panel score-card">
+            <span className="label">胜率</span>
+            <strong><AnimatedNumber value={globalRate} suffix="%" /></strong>
+            {globalRate !== null && <div className="mini-meter" aria-hidden="true"><span style={{ "--bar-pct": globalRate + "%" } as CSSProperties} /></div>}
+          </div>
         </div>}
+
         <div className="panel">
           <h3 className="detail-title">各玩法战绩</h3>
-          {profile.scores.length > 1 ? <table className="stats">
+          {kits.length > 0 ? <table className="stats">
             <thead><tr><th scope="col">玩法</th><th scope="col">Elo</th><th scope="col">胜</th><th scope="col">负</th><th scope="col">胜率</th></tr></thead>
-            <tbody ref={enterRows}>{profile.scores.filter(row => row.id !== "global").map((row, index) =>
-              <tr key={row.id} data-entry-row="" style={rowDelay(index)}><td className="kit-name">{row.name}</td><td className="elo">{formatNumber(row.elo)}</td><td>{row.wins}</td><td>{row.losses}</td><td>{rate(row.wins, row.losses)}</td></tr>)}</tbody>
+            <tbody ref={enterRows}>{kits.map((row, index) => {
+              const kitRate = rateNum(row.wins, row.losses);
+              return <tr key={row.id} data-entry-row="" style={rowDelay(index)}>
+                <td className="kit-name">{row.name}</td>
+                <td className="elo">{formatNumber(row.elo)}</td>
+                <td>{row.wins}</td>
+                <td>{row.losses}</td>
+                <td>
+                  <div className="rate-cell">
+                    <span>{rateText(row.wins, row.losses)}</span>
+                    {kitRate !== null && <span className="elo-bar" aria-hidden="true">
+                      <span style={{ "--bar-pct": kitRate + "%", "--row-delay": Math.min(index, 9) * 35 + "ms" } as CSSProperties} />
+                    </span>}
+                  </div>
+                </td>
+              </tr>;
+            })}</tbody>
           </table> : <Message>暂无分玩法战绩。</Message>}
         </div>
       </>}
@@ -212,14 +331,25 @@ function MatchesPage({ linked }: { linked: Link | null | undefined }) {
   return <>
     <PageIntro name="我的对局"><p>{linked ? linked.player + " · 7 天内最近 27 场" : "查看个人对局、胜负和排位 Elo 变化。"}</p></PageIntro>
     <div className="panel">
-      {linked === undefined ? <Message>正在读取绑定状态…</Message>
+      {linked === undefined ? <TableSkeleton rows={4} label="正在读取绑定状态" />
         : linked === null ? <Message><a className="btn primary" href="#account">绑定游戏账号</a></Message>
-        : error ? <Message error>{error} <button className="btn" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
-        : !matches ? <Message>正在查询近期对局…</Message>
+        : error ? <Message error>{error} <button className="btn compact" onClick={() => { setError(""); setRetry(n => n + 1); }}>重试</button></Message>
+        : !matches ? <TableSkeleton rows={4} label="正在查询近期对局" />
         : matches.length === 0 ? <Message>最近 7 天暂无可查看的对局。</Message>
-        : <div ref={enterRows}>{matches.map((match, index) => <a key={match.id} className="list-row match-link" data-entry-row="" style={rowDelay(index)} href={"#match/" + match.id}>
-          <div><strong>{match.kit} · {match.opponents.length ? match.opponents.join(" / ") : "未知对手"}</strong><small>{match.ranked ? "排位" : "非排位"} · {formatDate(match.endedAt)}</small></div>
-          <div className={"result " + match.result}>{labels[match.result]}{match.delta !== null && <div>{match.delta > 0 ? "+" : ""}{match.delta} Elo</div>}<span className="match-link-label">查看详情</span></div>
+        : <div ref={enterRows}>{matches.map((match, index) => <a key={match.id} className={"list-row match-link outcome-" + match.result} data-entry-row="" style={rowDelay(index)} href={"#match/" + match.id}>
+          <div>
+            <strong>{match.kit} · {match.opponents.length ? match.opponents.join(" / ") : "未知对手"}</strong>
+            <small>{match.ranked ? "排位" : "非排位"} · {formatDate(match.endedAt)}</small>
+          </div>
+          <div className={"result " + match.result}>
+            <span className={"result-pill " + match.result}>
+              {labels[match.result]}
+              {match.delta !== null && <span className={"elo-delta " + (match.delta > 0 ? "pos" : match.delta < 0 ? "neg" : "flat")}>
+                {match.delta > 0 ? "+" : ""}{match.delta}
+              </span>}
+            </span>
+            <span className="match-link-label">查看详情 <span className="link-arrow" aria-hidden="true">→</span></span>
+          </div>
         </a>)}</div>}
     </div>
   </>;
@@ -228,9 +358,10 @@ function MatchesPage({ linked }: { linked: Link | null | undefined }) {
 function AccountPage({ mode, selfHosted, linked, connected, onRefresh }: { mode: Mode; selfHosted: boolean; linked?: Link | null; connected?: boolean; onRefresh: () => Promise<void> }) {
   const [code, setCode] = useState<Code>();
   const [busy, setBusy] = useState(false);
+  const [copiedCmd, setCopiedCmd] = useState(false);
   const [error, setError] = useState("");
   async function issue() {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setCopiedCmd(false);
     try { setCode(await api<Code>("code", {})); }
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
@@ -257,21 +388,51 @@ function AccountPage({ mode, selfHosted, linked, connected, onRefresh }: { mode:
     catch (err) { setError((err as Error).message); }
     finally { setBusy(false); }
   }
+  async function copyCommand() {
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText("/micetlink " + code.code);
+      setCopiedCmd(true);
+      window.setTimeout(() => setCopiedCmd(false), 1800);
+    } catch {
+      setCopiedCmd(false);
+    }
+  }
   return <>
     <PageIntro name="绑定游戏账号"><p>{selfHosted ? "验证你的 Minecraft 账号，访问个人对局。" : "用 Minecraft 账号确认对局和 Tag 发放的接收人。"}</p></PageIntro>
     <div className="panel card vstack">
-      {linked ? <><p><strong>{linked.player}</strong> · 已绑定{mode === "demo" ? "（示例账号）" : ""}</p><a className="btn primary" href="#matches">查看我的对局</a>
-        {selfHosted && <button className="btn" disabled={busy} onClick={logout}>退出当前浏览器</button>}</>
+      {linked ? <>
+        <div className="stat-banner-id">
+          <div className="avatar-framed"><Avatar name={linked.player} uuid={linked.uuid} /></div>
+          <div>
+            <p className="label">已绑定账号{mode === "demo" ? " · 示例模式" : ""}</p>
+            <h2>{linked.player}</h2>
+          </div>
+        </div>
+        <div className="form-actions">
+          <a className="btn primary" href="#matches">查看我的对局</a>
+          {selfHosted && <button className="btn" disabled={busy} onClick={logout}>退出当前浏览器</button>}
+        </div>
+      </>
         : <>
-          {mode === "bridge" && connected === false && <p>游戏服桥接离线。恢复连接后可在游戏内输入绑定指令。</p>}
-          <button className="btn primary" disabled={busy || linked === undefined || (selfHosted && connected === false)} onClick={issue}>{code ? "重新生成验证码" : "生成一次性验证码"}</button>
+          {mode === "bridge" && connected === false && <p className="inline-error">游戏服桥接离线。恢复连接后可在游戏内输入绑定指令。</p>}
+          <div className="form-actions">
+            <button className="btn primary" disabled={busy || linked === undefined || (selfHosted && connected === false)} onClick={issue}>{code ? "重新生成验证码" : "生成一次性验证码"}</button>
+            {selfHosted && linked === null && <button className="btn" disabled={busy} onClick={checkBinding}>完成绑定</button>}
+          </div>
           {code && <div className="vstack">
             <p>{selfHosted ? "请在 MiCet Practice 服输入本页生成的验证码。验证码 5 分钟内有效。" : `请在${mode === "demo" ? "示例" : "测试"}服输入，验证码 5 分钟内有效。`}</p>
-            <code className="code">/micetlink {code.code}</code>
-            {mode === "demo" ? <button className="btn" disabled={busy} onClick={verifyDemo}>模拟游戏内验证</button>
-              : !selfHosted && <button className="btn" disabled={busy} onClick={checkBinding}>检查绑定结果</button>}
+            <div className="code-box">
+              <code className="code">/micetlink {code.code}</code>
+              <button type="button" className="btn compact" onClick={() => void copyCommand()}>
+                {copiedCmd ? "✓ 已复制指令" : "复制指令"}
+              </button>
+            </div>
+            <div className="form-actions">
+              {mode === "demo" ? <button className="btn" disabled={busy} onClick={verifyDemo}>模拟游戏内验证</button>
+                : !selfHosted && <button className="btn" disabled={busy} onClick={checkBinding}>检查绑定结果</button>}
+            </div>
           </div>}
-          {selfHosted && linked === null && <button className="btn" disabled={busy} onClick={checkBinding}>完成绑定</button>}
         </>}
       {error && <p role="alert" className="inline-error">{error}</p>}
     </div>
@@ -281,6 +442,7 @@ function AccountPage({ mode, selfHosted, linked, connected, onRefresh }: { mode:
 function ShopPage({ linked, onOrder }: { linked?: Link | null; onOrder: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const previewPlayer = linked?.player || DEMO_PLAYER;
   async function checkout() {
     setBusy(true); setError("");
     try { const { order } = await api<{ order: Order }>("checkout", { sku: TEST_SKU }); onOrder(order.id); }
@@ -297,15 +459,21 @@ function ShopPage({ linked, onOrder }: { linked?: Link | null; onOrder: (id: str
     {error && <p role="alert" className="inline-error">{error}</p>}
     <div className="section">
       <div className="section-title">
-        <div><h2>标签列表</h2><p>共 {catalog.length} 个</p></div>
-        <a className="sub-link" href="#orders">查看订单</a>
+        <div><h2>标签列表</h2><p>共 {catalog.length} 个游戏内永久装饰称号</p></div>
+        <a className="sub-link" href="#orders">查看订单 <span className="link-arrow" aria-hidden="true">→</span></a>
       </div>
       <div className="cards">{catalog.map(item =>
-        <article key={item.name} className="panel card">
+        <article key={item.name} className="panel card vstack">
           <h3 className="catalog-tag-name">
             <span className={`tag tag-${item.color}`}>[{item.prefix}]</span>
-            {item.prefix !== item.name && <span className="catalog-tag-caption">{item.name}</span>}
+            <span className="catalog-tag-caption">{item.name} · 永久称号</span>
           </h3>
+          <div className="mc-chat-preview" aria-label={"游戏内效果预览：" + item.name}>
+            <span className={`mc-chat-prefix tag-${item.color}`}>[{item.prefix}]</span>
+            <span className="mc-chat-name">{previewPlayer}:</span>
+            <span className="mc-chat-msg">gg</span>
+            <span className="mc-chat-label">预览</span>
+          </div>
         </article>)}</div>
     </div>
   </>;
@@ -340,16 +508,19 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
   }
   return <>
     <PageIntro name="我的订单"><p>{mode === "demo" ? "模拟支付 · 模拟发货" : "模拟支付 · 测试服发货"}</p></PageIntro>
-    {error && <p className="inline-error" role="alert">{error} <button className="btn" onClick={() => { setError(""); refresh(n => n + 1); }}>重试</button></p>}
+    {error && <p className="inline-error" role="alert">{error} <button className="btn compact" onClick={() => { setError(""); refresh(n => n + 1); }}>重试</button></p>}
     <div className="vstack">
-      {!orders ? <div className="panel"><Message>正在读取订单…</Message></div>
+      {!orders ? <div className="panel"><TableSkeleton rows={3} label="正在读取订单" /></div>
         : !orders.length ? <div className="panel"><Message>暂无订单。 <a className="sub-link" href="#shop">前往商店</a></Message></div>
         : orders.map(order => <article key={order.id} className={"panel card vstack" + (focus === order.id ? " order-focus" : "")}>
-          <div className="section-title"><div><span className="tag tag-test">[MICET TEST]</span><h2>测试标签</h2></div><span className="order-status" role="status">{statusLabel[order.status]}</span></div>
+          <div className="order-header">
+            <div><span className="tag tag-test">[MICET TEST]</span><h2>测试标签</h2></div>
+            <span className={"status-chip " + order.status} role="status">{statusLabel[order.status]}</span>
+          </div>
           <p>接收人 {order.player} · {formatDate(order.created_at)}{order.detail ? " · " + order.detail : ""}</p>
           <small className="label">订单 {order.id}</small>
           {order.status === "pending" && <button className="btn primary" disabled={busy === order.id} onClick={() => void pay(order.id)}>确认模拟支付</button>}
-          {order.status === "paid" && <small className="label">{mode === "demo" ? "等待模拟发货回执" : "等待测试服发货回执"}</small>}
+          {order.status === "paid" && <small className="label">{mode === "demo" ? "等待模拟发货回执…" : "等待测试服发货回执…"}</small>}
         </article>)}
     </div>
   </>;
@@ -361,6 +532,10 @@ export function MicetSite({ mode, selfHosted }: { mode: Mode; selfHosted: boolea
   const [statusError, setStatusError] = useState("");
   const [orderFocus, setOrderFocus] = useState("");
   const main = useRef<HTMLElement>(null);
+  const headerRef = useRef<HTMLElement>(null);
+  const activeNav = navView(route.view);
+  const navRef = useSlidingIndicator<HTMLElement>(activeNav);
+
   async function refreshStatus() {
     try { setStatus(await api<SiteStatus>("status")); setStatusError(""); }
     catch (err) { setStatusError((err as Error).message); throw err; }
@@ -377,6 +552,17 @@ export function MicetSite({ mode, selfHosted }: { mode: Mode; selfHosted: boolea
     window.addEventListener("hashchange", navigate);
     return () => window.removeEventListener("hashchange", navigate);
   }, [selfHosted]);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const header = headerRef.current;
+      if (header) header.dataset.scrolled = window.scrollY > 8 ? "true" : "false";
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   useEffect(() => {
     const stop = new AbortController();
     void api<SiteStatus>("status", undefined, stop.signal).then(
@@ -385,47 +571,61 @@ export function MicetSite({ mode, selfHosted }: { mode: Mode; selfHosted: boolea
     );
     return () => stop.abort();
   }, []);
+
   const view = route.view;
+  const stageKey = view + ":" + (route.player ?? route.matchId ?? "");
+
   return <>
     <a className="skip-link" href="#main" onClick={event => {
       event.preventDefault();
       main.current?.focus();
       main.current?.scrollIntoView();
     }}>跳到主要内容</a>
-    <header className="site-header"><div className="shell top">
+    <header className="site-header" ref={headerRef}><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><img src={serverLogo} className="brand-logo" width={32} height={32} alt="" /><span>MiCet.cc</span></a>
-      <nav aria-label="站点导航" data-backward={route.backward}>{menu.map(([key, label]) =>
-        <a key={key} href={"#" + key} aria-current={navView(view) === key ? "page" : undefined}>{label}</a>)}</nav>
-      <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>
+      <nav aria-label="站点导航" ref={navRef}>
+        {menu.map(([key, label]) =>
+          <a key={key} href={"#" + key} aria-current={activeNav === key ? "page" : undefined}>{label}</a>)}
+        <span className="sliding-beam" aria-hidden="true" />
+      </nav>
+      <a className={"btn top-account" + (status?.linked ? " linked" : "")} href="#account">
+        {status?.linked && <>
+          <span className="account-dot" aria-hidden="true" />
+          <Avatar name={status.linked.player} uuid={status.linked.uuid} />
+        </>}
+        <span>{status?.linked?.player ?? "绑定账号"}</span>
+      </a>
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
-      {statusError && <p className="inline-error" role="alert">{statusError} <button className="btn" onClick={() => void refreshStatus().catch(() => {})}>重试</button></p>}
-      {view === "home" && <ServerHome title={<HeroTitle home />} />}
-      {view === "stats" && <>
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="hero-meta">
-            <span className="hero-context">Elo Lookup</span>
-            {!selfHosted && <span className="env">{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span>}
-          </div>
-          <div className="hero-grid">
-            <HeroTitle />
-            <div className="hero-lookup">
-              <p className="hero-description">按游戏名查询 Elo、胜负场次和胜率。</p>
-              <Search />
-              {mode === "demo" && <p className="sample">查看 <a href={"#player/" + DEMO_PLAYER}>{DEMO_PLAYER}</a> 的示例战绩</p>}
+      {statusError && <p className="inline-error" role="alert">{statusError} <button className="btn compact" onClick={() => void refreshStatus().catch(() => {})}>重试</button></p>}
+      <div key={stageKey} className="view-stage" data-dir={route.backward ? "backward" : "forward"}>
+        {view === "home" && <ServerHome title={<HeroTitle home />} />}
+        {view === "stats" && <>
+          <section className="hero" aria-labelledby="hero-title">
+            <div className="hero-meta">
+              <span className="hero-context">Elo Lookup</span>
+              {!selfHosted && <span className="env-badge">{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span>}
             </div>
-          </div>
-        </section>
-        <Ranking mode={mode} selfHosted={selfHosted} side />
-      </>}
-      {view === "ranking" && <><PageIntro name="Elo 排行榜"><p>{mode === "demo" ? "示例数据 · " : ""}查看综合与各玩法前十名。</p></PageIntro><Ranking mode={mode} selfHosted={selfHosted} /></>}
-      {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
-      {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
-      {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
-      {view === "shop" && (selfHosted ? <LiveShop linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
-        <ShopPage linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
-      {view === "orders" && (selfHosted ? <LiveOrders key={status?.linked?.uuid} linked={status?.linked} focus={route.orderId}/> : <OrdersPage mode={mode} focus={orderFocus} />)}
-      {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
+            <div className="hero-grid">
+              <HeroTitle />
+              <div className="hero-lookup">
+                <p className="hero-description">按游戏名查询 Elo、胜负场次和胜率。</p>
+                <Search />
+                {mode === "demo" && <p className="sample">查看 <a href={"#player/" + DEMO_PLAYER}>{DEMO_PLAYER}</a> 的示例战绩</p>}
+              </div>
+            </div>
+          </section>
+          <Ranking mode={mode} selfHosted={selfHosted} side />
+        </>}
+        {view === "ranking" && <><PageIntro name="Elo 排行榜"><p>{mode === "demo" ? "示例数据 · " : ""}查看综合与各玩法前十名。</p></PageIntro><Ranking mode={mode} selfHosted={selfHosted} /></>}
+        {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
+        {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
+        {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
+        {view === "shop" && (selfHosted ? <LiveShop linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }} /> :
+          <ShopPage linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
+        {view === "orders" && (selfHosted ? <LiveOrders key={status?.linked?.uuid} linked={status?.linked} focus={route.orderId} /> : <OrdersPage mode={mode} focus={orderFocus} />)}
+        {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
+      </div>
     </main>
     <footer className="site-footer"><div className="shell footer-row">
       <span><strong>MiCet.cc</strong> · 1.7-1.8 Practice Server</span>

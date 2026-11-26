@@ -1,1 +1,27 @@
-html{scroll-behavior:auto}
+html {
+  scroll-behavior: auto;
+  background: #0b0b0c;
+  color-scheme: dark;
+  scrollbar-color: rgb(244 241 235 / 22%) #0b0b0c;
+  scrollbar-width: thin;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0b0c;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(244 241 235 / 18%);
+  border: 2px solid #0b0b0c;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(98 217 244 / 45%);
+}

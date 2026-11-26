@@ -5,6 +5,8 @@ import { readStats } from "@/lib/micet-client";
 import type { Link, Mode } from "@/lib/micet-data";
 import type { InventoryItem, MatchDetail, MatchSnapshot } from "@/lib/micet-match-detail";
 import { itemTexture, potionOverlay, potionTint } from "./match-item-textures";
+import { useSlidingIndicator } from "./site-motion";
+import { AnimatedNumber } from "./animated-number";
 import "./match-detail.css";
 
 const items: Record<string, string> = {
@@ -81,6 +83,22 @@ function amount(value: number | null, unit = "") {
 type Slot = { id: string; item: InventoryItem | null; title: string };
 const armorLabels = ["头盔", "胸甲", "护腿", "靴子"];
 
+function ItemGraphic({ item }: { item: InventoryItem }) {
+  const texture = itemTexture(item);
+  const short = item.material.split("_").at(-1)?.slice(0, 2);
+  if (texture) {
+    return <span className="item-icon item-texture" aria-hidden="true">
+      {item.material === "POTION" && potionOverlay && <span className="potion-fill" style={{
+        "--potion-overlay": `url("${potionOverlay}")`, "--potion-tint": potionTint(item),
+      } as CSSProperties} />}
+      <img src={texture} alt="" />
+    </span>;
+  }
+  return <span className={"item-icon " + iconKind(item.material) + " " + iconTone(item)} aria-hidden="true">
+    {iconKind(item.material) === "other" ? short : null}
+  </span>;
+}
+
 function SlotRow({ slots, label, active, onSelect }: {
   slots: Slot[]; label: string; active: string | null; onSelect: (slot: Slot) => void;
 }) {
@@ -91,25 +109,19 @@ function SlotRow({ slots, label, active, onSelect }: {
         if (!slot.item) return <span key={slot.id} className="item-slot empty" aria-hidden="true" />;
         const item = slot.item;
         const name = itemName(item);
-        const texture = itemTexture(item);
-        const short = item.material.split("_").at(-1)?.slice(0, 2);
+        const durabilityRatio = item.maxDamage != null && item.damage != null && item.damage > 0
+          ? Math.max(0, item.maxDamage - item.damage) / item.maxDamage
+          : null;
+        const durabilityClass = durabilityRatio === null ? "" : durabilityRatio < 0.25 ? " dur-low" : durabilityRatio < 0.6 ? " dur-mid" : "";
         return <button key={slot.id} type="button"
           className={"item-slot" + (item.enchantments.length ? " enchanted" : "")}
           title={name} aria-pressed={slot.id === active}
           aria-label={slot.title + " · " + name + " ×" + item.count}
           onClick={() => onSelect(slot)}>
-          {texture ? <span className="item-icon item-texture" aria-hidden="true">
-            {item.material === "POTION" && potionOverlay && <span className="potion-fill" style={{
-              "--potion-overlay": `url("${potionOverlay}")`, "--potion-tint": potionTint(item),
-            } as CSSProperties} />}
-            <img src={texture} alt="" />
-          </span>
-            : <span className={"item-icon " + iconKind(item.material) + " " + iconTone(item)} aria-hidden="true">
-              {iconKind(item.material) === "other" ? short : null}
-            </span>}
+          <ItemGraphic item={item} />
           {item.count > 1 && <span className="item-count" aria-hidden="true">{item.count}</span>}
-          {item.maxDamage != null && item.damage != null && item.damage > 0 && <span className="slot-durability" aria-hidden="true">
-            <span style={{ width: (Math.max(0, item.maxDamage - item.damage) / item.maxDamage) * 100 + "%" }} />
+          {durabilityRatio !== null && <span className={"slot-durability" + durabilityClass} aria-hidden="true">
+            <span style={{ width: durabilityRatio * 100 + "%" }} />
           </span>}
         </button>;
       })}
@@ -121,16 +133,23 @@ function ItemInspector({ selection }: { selection: Slot | null }) {
   const item = selection?.item;
   return <section className="panel match-box item-inspector" aria-labelledby="item-inspector-title" aria-live="polite">
     <h3 id="item-inspector-title">物品详情</h3>
-    {item ? <>
-      <div className="item-inspector-heading"><strong>{itemName(item)}</strong><span>×{item.count}</span></div>
-      <p className="item-id">{selection.title} · {item.material}</p>
+    {item ? <div key={selection.id} className="inspector-body">
+      <div className="inspector-top">
+        <div className={"inspector-preview" + (item.enchantments.length ? " enchanted" : "")}>
+          <ItemGraphic item={item} />
+        </div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div className="item-inspector-heading"><strong>{itemName(item)}</strong><span>×{item.count}</span></div>
+          <p className="item-id">{selection.title} · {item.material}</p>
+        </div>
+      </div>
       {item.damage != null && item.maxDamage != null && <p>耐久 {Math.max(0, item.maxDamage - item.damage)} / {item.maxDamage}</p>}
       {item.variant != null && <p>物品数据值 {item.variant}</p>}
       {item.enchantments.length > 0 && <ul>
         {item.enchantments.map(entry => <li key={entry.type}>{enchantments[entry.type] ?? entry.type} {level(entry.level)}</li>)}
       </ul>}
       {item.lore.length > 0 && <ul>{item.lore.map((line, index) => <li key={index}>{line}</li>)}</ul>}
-    </> : <p className="muted">选择一个有物品的格子，查看数量、耐久、附魔和描述。</p>}
+    </div> : <p className="muted">选择一个有物品的格子，查看数量、耐久、附魔和描述。</p>}
   </section>;
 }
 
@@ -138,13 +157,38 @@ function MatchNumbers({ snapshot }: { snapshot: MatchSnapshot }) {
   return <section className="panel match-box" aria-labelledby="match-stats-title">
     <h2 id="match-stats-title">对战数据</h2>
     <dl className="combat-stats">
-      {[
-        ["总命中", amount(snapshot.hits)], ["格挡命中", amount(snapshot.blocked)],
-        ["暴击", amount(snapshot.critical)], ["最高连击", amount(snapshot.combo)],
-        ["延迟", amount(snapshot.ping, " ms")], ["治疗药水准确率", amount(snapshot.healAccuracy, "%")],
-        ...(snapshot.debuffAccuracy === null ? [] : [["负面药水准确率", amount(snapshot.debuffAccuracy, "%")]]),
-        ...(snapshot.elo ? [["排位 Elo", snapshot.elo.before + " → " + snapshot.elo.after + " (" + (snapshot.elo.delta >= 0 ? "+" : "") + snapshot.elo.delta + ")"]] : []),
-      ].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+      <div><dt>总命中</dt><dd><AnimatedNumber value={snapshot.hits} duration={440} /></dd></div>
+      <div><dt>格挡命中</dt><dd><AnimatedNumber value={snapshot.blocked} duration={440} /></dd></div>
+      <div><dt>暴击</dt><dd><AnimatedNumber value={snapshot.critical} duration={440} /></dd></div>
+      <div><dt>最高连击</dt><dd><AnimatedNumber value={snapshot.combo} duration={440} /></dd></div>
+      <div><dt>延迟</dt><dd>{amount(snapshot.ping, " ms")}</dd></div>
+      <div>
+        <dt>治疗药水准确率</dt>
+        <dd className="combat-metric">
+          <span>{amount(snapshot.healAccuracy, "%")}</span>
+          {snapshot.healAccuracy !== null && <span className="combat-bar" aria-hidden="true">
+            <span style={{ "--bar-pct": Math.min(100, Math.max(0, snapshot.healAccuracy)) + "%" } as CSSProperties} />
+          </span>}
+        </dd>
+      </div>
+      {snapshot.debuffAccuracy !== null && <div>
+        <dt>负面药水准确率</dt>
+        <dd className="combat-metric">
+          <span>{amount(snapshot.debuffAccuracy, "%")}</span>
+          <span className="combat-bar" aria-hidden="true">
+            <span style={{ "--bar-pct": Math.min(100, Math.max(0, snapshot.debuffAccuracy)) + "%" } as CSSProperties} />
+          </span>
+        </dd>
+      </div>}
+      {snapshot.elo && <div>
+        <dt>排位 Elo</dt>
+        <dd>
+          {snapshot.elo.before} → {snapshot.elo.after}{" "}
+          <span className={snapshot.elo.delta > 0 ? "combat-delta-pos" : snapshot.elo.delta < 0 ? "combat-delta-neg" : ""}>
+            ({snapshot.elo.delta >= 0 ? "+" : ""}{snapshot.elo.delta})
+          </span>
+        </dd>
+      </div>}
     </dl>
   </section>;
 }
@@ -163,6 +207,8 @@ function PlayerCapture({ snapshot, player }: { snapshot: MatchSnapshot; player: 
     id: "armor-" + index, item: armor?.[3 - index] ?? null, title,
   }));
   const slotProps = { active: selection?.id ?? null, onSelect: select };
+  const healthPct = snapshot.health === null ? null : Math.min(100, Math.max(0, (snapshot.health / 20) * 100));
+  const hungerPct = snapshot.hunger === null ? null : Math.min(100, Math.max(0, (snapshot.hunger / 20) * 100));
 
   return <div className="match-data-grid">
     <section className="panel match-box inventory-window" aria-labelledby="inventory-title">
@@ -173,8 +219,16 @@ function PlayerCapture({ snapshot, player }: { snapshot: MatchSnapshot; player: 
       </> : <p className="muted">这场对局没有保存背包和快捷栏。</p>}
       {armor ? <SlotRow label="护甲" slots={armorSlots} {...slotProps} /> : <p className="muted">没有保存护甲。</p>}
       <dl className="game-status">
-        <div><dt>生命</dt><dd>{amount(snapshot.health, " HP")}</dd></div>
-        <div><dt>饥饿</dt><dd>{snapshot.hunger === null ? "—" : snapshot.hunger + " / 20"}</dd></div>
+        <div>
+          <dt>生命</dt>
+          <dd>{amount(snapshot.health, " HP")}</dd>
+          {healthPct !== null && <div className="hud-meter hp" aria-hidden="true"><span style={{ "--bar-pct": healthPct + "%" } as CSSProperties} /></div>}
+        </div>
+        <div>
+          <dt>饥饿</dt>
+          <dd>{snapshot.hunger === null ? "—" : snapshot.hunger + " / 20"}</dd>
+          {hungerPct !== null && <div className="hud-meter food" aria-hidden="true"><span style={{ "--bar-pct": hungerPct + "%" } as CSSProperties} /></div>}
+        </div>
         <div><dt>剩余治疗</dt><dd>{snapshot.healing ? snapshot.healing.count + " " + (healingMethods[snapshot.healing.method] ?? snapshot.healing.method) : "—"}</dd></div>
         {snapshot.healing?.method === "POTIONS" && <div><dt>扔空药水</dt><dd>{amount(snapshot.healing.missed)}</dd></div>}
       </dl>
@@ -240,6 +294,7 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
 
   const detail = match?.detail;
   const selected = target || detail?.snapshot.uuid;
+  const participantsRef = useSlidingIndicator<HTMLDivElement>(selected, 6);
   const player = detail?.participants.find(participant => participant.uuid === selected);
   const snapshot = selected ? match?.snapshots.get(selected) : undefined;
   const retryRequest = () => {
@@ -254,8 +309,12 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
       {detail && <p>{[detail.kit, detail.map, detail.ranked ? "排位" : "非排位", mode === "demo" ? "示例对局" : null].filter(Boolean).join(" · ")}</p>}
     </header>
     {linked === null ? <div className="panel"><p className="message"><a className="btn primary" href="#account">绑定游戏账号后查看</a></p></div>
-      : !linked || (match === undefined && !error) ? <div className="panel"><p role="status" className="message">正在读取对局详情和物品栏…</p></div>
-      : error ? <div className="panel"><p role="alert" className="message error">{error} <button className="btn" onClick={retryRequest}>重试</button></p></div>
+      : !linked || (match === undefined && !error) ? <div className="panel"><div className="skeleton-wrap" role="status" aria-label="正在读取对局详情和物品栏">
+        <div className="skeleton-row"><span className="skeleton-bar" /><span className="skeleton-bar" /><span className="skeleton-bar" /></div>
+        <span className="skeleton-bar tall" />
+        <span className="skeleton-bar tall" />
+      </div></div>
+      : error ? <div className="panel"><p role="alert" className="message error">{error} <button className="btn compact" onClick={retryRequest}>重试</button></p></div>
       : !detail ? <div className="panel"><p role="status" className="message">这场对局已过期、未保存或当前账号无权查看。</p></div>
       : <>
         <div className="match-meta">
@@ -263,16 +322,21 @@ export function MatchDetailPage({ id, linked, mode }: { id: string; linked?: Lin
             {detail.startedAt !== null && " · 时长 " + duration((detail.endedAt - detail.startedAt) / 1000)}
             {detail.endReason && " · " + (endingReasons[detail.endReason] ?? detail.endReason)}
           </p>
-          <div className="match-participants" aria-label="选择对局玩家">
-            {detail.participants.map((entry, index) => <button key={entry.uuid} className="pill" aria-pressed={entry.uuid === selected}
-              onClick={() => {
-                if (entry.uuid === selected) return;
-                setBackward(index < detail.participants.findIndex(person => person.uuid === selected));
-                setTarget(entry.uuid);
-              }}>
-              {entry.name}{entry.uuid === viewer ? "（我）" : ""}
-              <span>{detail.winnerTeam === null ? "平局" : detail.winnerTeam === entry.team ? "胜利" : "战败"}</span>
-            </button>)}
+          <div className="match-participants" ref={participantsRef} aria-label="选择对局玩家">
+            {detail.participants.map((entry, index) => {
+              const won = detail.winnerTeam !== null && detail.winnerTeam === entry.team;
+              const lost = detail.winnerTeam !== null && detail.winnerTeam !== entry.team;
+              return <button key={entry.uuid} className="pill" aria-pressed={entry.uuid === selected}
+                onClick={() => {
+                  if (entry.uuid === selected) return;
+                  setBackward(index < detail.participants.findIndex(person => person.uuid === selected));
+                  setTarget(entry.uuid);
+                }}>
+                {entry.name}{entry.uuid === viewer ? "（我）" : ""}
+                <span className={won ? "p-win" : lost ? "p-loss" : ""}>{detail.winnerTeam === null ? "平局" : won ? "胜利" : "战败"}</span>
+              </button>;
+            })}
+            <span className="sliding-beam" aria-hidden="true" />
           </div>
         </div>
         {player && snapshot ? <PlayerCapture key={player.uuid} snapshot={snapshot} player={player.name} />
