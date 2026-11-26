@@ -28,13 +28,7 @@ For a hosted Worker, run `node scripts/minecraft-status.mjs` on a Node host with
 
 ## Hosting
 
-For a public showcase on a VPS, use the public launch flag after building.
-
-```sh
-npm start -- --port 8787 --var MICET_PUBLIC_LAUNCH:1
-```
-
-This serves the homepage, live MOTD and the Tag catalog. It disables account, stats, bridge and checkout endpoints in the application. Point Cloudflare Tunnel at `http://127.0.0.1:8787`. The public Tag selection is in `lib/micet-data.ts`.
+For a public VPS, configure self-hosting as described below. When upgrading an old display-only installation, remove `MICET_PUBLIC_LAUNCH=1` from runtime variables and startup arguments after configuring self-hosting. Leaving the retired flag enabled returns HTTP 503 for pages and APIs.
 
 ### Self-hosted Practice stats and account binding
 

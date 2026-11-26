@@ -4,6 +4,13 @@ import type { ConnectorBinding } from "../lib/connector-contract.mjs";
 
 const worker = {
   fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    // The retired flag used to block checkout and account access. Require an explicit cutover.
+    if (env.MICET_PUBLIC_LAUNCH === "1") {
+      return Response.json({ error: "站点配置已过期，请联系管理员。" }, {
+        status: 503,
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.

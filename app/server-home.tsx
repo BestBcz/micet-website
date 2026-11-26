@@ -117,7 +117,7 @@ function ServerRow() {
   </section>;
 }
 
-export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLaunch: boolean }) {
+export function ServerHome({ title }: { title: ReactNode }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const address = useRef<HTMLInputElement>(null);
   const [copied, setCopied] = useState("");
@@ -137,12 +137,12 @@ export function ServerHome({ title, publicLaunch }: { title: ReactNode; publicLa
       <div className="server-intro">
         <p className="hero-context">1.7-1.8 Practice Server</p>
         {title}
-        {!publicLaunch && <p className="server-description">查看你在服务器的每场战绩。</p>}
+        <p className="server-description">查看你在服务器的每场战绩。</p>
         <div className="server-actions">
           <button className="btn primary play-now" type="button" onClick={() => dialog.current?.showModal()}>
             Play Now <span className="play-arrow" aria-hidden="true"><span>→</span></span>
           </button>
-          <a className="btn" href={publicLaunch ? "#shop" : "#stats"}>{publicLaunch ? "查看商店" : "查看战绩"}</a>
+          <a className="btn" href="#stats">查看战绩</a>
         </div>
       </div>
       <ServerRow />

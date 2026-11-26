@@ -3,6 +3,7 @@ declare namespace Cloudflare {
     DB?: D1Database;
     MICET_MODE?: string;
     MICET_BRIDGE_SECRET?: string;
+    /** Retired. A value of "1" blocks requests until the deployment is migrated. */
     MICET_PUBLIC_LAUNCH?: string;
     MICET_SELF_HOSTED?: string;
     MICET_SITE_ORIGIN?: string;

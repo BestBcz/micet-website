@@ -30,10 +30,6 @@ export function micetMode(): Mode {
   return isSelfHosted() || env.MICET_MODE === "bridge" ? "bridge" : "demo";
 }
 
-export function isPublicLaunch(): boolean {
-  return env.MICET_PUBLIC_LAUNCH === "1";
-}
-
 function database(): D1Database {
   if (!env.DB) throw new RequestError(503, "站点数据库暂不可用。");
   return env.DB;
@@ -376,7 +372,6 @@ export async function micetApi(request: Request, area: string, action: string) {
     if (area === "micet" && action === "server-status" && request.method !== "POST") {
       return json(await getServerStatus(env.MICET_STATUS_URL));
     }
-    if (isPublicLaunch()) throw new RequestError(404, "该功能暂未开放。");
     if (isSelfHosted() && area === "payments" && action === "return" && request.method === "GET") {
       return new Response(null, { status: 303, headers: {
         Location: "/#orders", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",

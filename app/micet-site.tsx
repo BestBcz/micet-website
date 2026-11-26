@@ -20,7 +20,6 @@ type Code = { code: string; expiresAt: number };
 
 const views: View[] = ["home", "stats", "ranking", "player", "matches", "match", "shop", "orders", "account"];
 const menu: Array<[View, string]> = [["home", "首页"], ["stats", "战绩查询"], ["ranking", "Elo 排行"], ["matches", "我的对局"], ["shop", "商店"]];
-const publicMenu: Array<[View, string]> = [["home", "首页"], ["shop", "商店"]];
 function navView(view: View) {
   if (view === "player") return "stats";
   if (view === "match") return "matches";
@@ -35,9 +34,8 @@ const formatDate = (value: number) => new Intl.DateTimeFormat("zh-CN", {
   month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 }).format(value);
 
-function parseRoute(publicLaunch: boolean, selfHosted: boolean): Route {
+function parseRoute(selfHosted: boolean): Route {
   const [raw, name] = window.location.hash.slice(1).split("/");
-  if (publicLaunch) return { view: raw === "shop" ? "shop" : "home" };
   if (selfHosted && raw === "orders") return { view: "orders", orderId: name };
   if (!views.includes(raw as View)) return { view: "home" };
   if (raw === "match") {
@@ -280,7 +278,7 @@ function AccountPage({ mode, selfHosted, linked, connected, onRefresh }: { mode:
   </>;
 }
 
-function ShopPage({ catalogOnly, linked, onOrder }: { catalogOnly: boolean; linked?: Link | null; onOrder: (id: string) => void }) {
+function ShopPage({ linked, onOrder }: { linked?: Link | null; onOrder: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function checkout() {
@@ -291,18 +289,16 @@ function ShopPage({ catalogOnly, linked, onOrder }: { catalogOnly: boolean; link
   }
   return <>
     <PageIntro name="商店"><p>查看 MiCet 游戏内标签。站内购买筹备中。</p></PageIntro>
-    {!catalogOnly && <>
-      <section className="panel feature" aria-label="测试商品">
-        <div><span className="tag tag-test">[{testTag.tag}]</span><h2>{testTag.name}</h2><p>{testTag.description} 本次测试无需付款。</p></div>
-        {linked === null ? <a className="btn primary" href="#account">绑定账号后结账</a>
-          : <button className="btn primary" disabled={busy || linked === undefined} onClick={checkout}>{busy ? "正在创建…" : "创建测试订单"}</button>}
-      </section>
-      {error && <p role="alert" className="inline-error">{error}</p>}
-    </>}
+    <section className="panel feature" aria-label="测试商品">
+      <div><span className="tag tag-test">[{testTag.tag}]</span><h2>{testTag.name}</h2><p>{testTag.description} 本次测试无需付款。</p></div>
+      {linked === null ? <a className="btn primary" href="#account">绑定账号后结账</a>
+        : <button className="btn primary" disabled={busy || linked === undefined} onClick={checkout}>{busy ? "正在创建…" : "创建测试订单"}</button>}
+    </section>
+    {error && <p role="alert" className="inline-error">{error}</p>}
     <div className="section">
       <div className="section-title">
         <div><h2>标签列表</h2><p>共 {catalog.length} 个</p></div>
-        {!catalogOnly && <a className="sub-link" href="#orders">查看订单</a>}
+        <a className="sub-link" href="#orders">查看订单</a>
       </div>
       <div className="cards">{catalog.map(item =>
         <article key={item.name} className="panel card">
@@ -359,7 +355,7 @@ function OrdersPage({ mode, focus }: { mode: Mode; focus: string }) {
   </>;
 }
 
-export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publicLaunch: boolean; selfHosted: boolean }) {
+export function MicetSite({ mode, selfHosted }: { mode: Mode; selfHosted: boolean }) {
   const [route, setRoute] = useState<Route>({ view: "home" });
   const [status, setStatus] = useState<SiteStatus>();
   const [statusError, setStatusError] = useState("");
@@ -371,7 +367,7 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
   }
   useEffect(() => {
     const update = () => {
-      const next = parseRoute(publicLaunch, selfHosted);
+      const next = parseRoute(selfHosted);
       const position = (view: View) => menu.findIndex(([key]) => key === navView(view));
       setRoute(previous => ({ ...next, backward: position(next.view) < position(previous.view) }));
       window.scrollTo(0, 0);
@@ -380,16 +376,15 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     update();
     window.addEventListener("hashchange", navigate);
     return () => window.removeEventListener("hashchange", navigate);
-  }, [publicLaunch, selfHosted]);
+  }, [selfHosted]);
   useEffect(() => {
-    if (publicLaunch) return;
     const stop = new AbortController();
     void api<SiteStatus>("status", undefined, stop.signal).then(
       value => { if (!stop.signal.aborted) setStatus(value); },
       err => { if (!stop.signal.aborted) setStatusError((err as Error).message); },
     );
     return () => stop.abort();
-  }, [publicLaunch]);
+  }, []);
   const view = route.view;
   return <>
     <a className="skip-link" href="#main" onClick={event => {
@@ -399,13 +394,13 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
     }}>跳到主要内容</a>
     <header className="site-header"><div className="shell top">
       <a className="brand" href="#home" aria-label="MiCet.cc 首页"><img src={serverLogo} className="brand-logo" width={32} height={32} alt="" /><span>MiCet.cc</span></a>
-      <nav aria-label="站点导航" data-backward={route.backward}>{(publicLaunch ? publicMenu : menu).map(([key, label]) =>
+      <nav aria-label="站点导航" data-backward={route.backward}>{menu.map(([key, label]) =>
         <a key={key} href={"#" + key} aria-current={navView(view) === key ? "page" : undefined}>{label}</a>)}</nav>
-      {!publicLaunch && <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>}
+      <a className="btn top-account" href="#account">{status?.linked?.player ?? "绑定账号"}</a>
     </div></header>
     <main className="shell" id="main" ref={main} tabIndex={-1}>
       {statusError && <p className="inline-error" role="alert">{statusError} <button className="btn" onClick={() => void refreshStatus().catch(() => {})}>重试</button></p>}
-      {view === "home" && <ServerHome title={<HeroTitle home />} publicLaunch={publicLaunch} />}
+      {view === "home" && <ServerHome title={<HeroTitle home />} />}
       {view === "stats" && <>
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-meta">
@@ -427,14 +422,14 @@ export function MicetSite({ mode, publicLaunch, selfHosted }: { mode: Mode; publ
       {view === "player" && route.player && <ProfilePage key={route.player} mode={mode} name={route.player} selfHosted={selfHosted} />}
       {view === "matches" && <MatchesPage key={status?.linked?.uuid ?? "unlinked"} linked={status?.linked} />}
       {view === "match" && route.matchId && <MatchDetailPage key={route.matchId + ":" + (status?.linked?.uuid ?? "")} id={route.matchId} linked={status?.linked} mode={mode} />}
-      {view === "shop" && (selfHosted && !publicLaunch ? <LiveShop linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
-        <ShopPage catalogOnly={publicLaunch} linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
+      {view === "shop" && (selfHosted ? <LiveShop linked={status?.linked} onOrder={id => { window.location.hash = "orders/" + id; }}/> :
+        <ShopPage linked={status?.linked} onOrder={id => { setOrderFocus(id); window.location.hash = "orders"; }} />)}
       {view === "orders" && (selfHosted ? <LiveOrders key={status?.linked?.uuid} linked={status?.linked} focus={route.orderId}/> : <OrdersPage mode={mode} focus={orderFocus} />)}
       {view === "account" && <AccountPage mode={mode} selfHosted={selfHosted} linked={status?.linked} connected={status?.connected} onRefresh={refreshStatus} />}
     </main>
     <footer className="site-footer"><div className="shell footer-row">
       <span><strong>MiCet.cc</strong> · 1.7-1.8 Practice Server</span>
-      {!publicLaunch && !selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
+      {!selfHosted && <><a href="#orders">我的订单</a><span>{mode === "demo" ? "私有预览 · 示例数据" : "私有预览 · 测试服"}</span></>}
     </div></footer>
   </>;
 }

@@ -8,8 +8,7 @@ import { Miniflare } from "miniflare";
 const siteOrigin = "https://micet-test.example.invalid";
 const bridgeSecret = "micet-self-hosted-integration-fixture-secret";
 
-test("self-hosted account binding and read-only bridge", async t => {
-  const base = "http://localhost";
+async function startWorker(t, bindings) {
   const serverRoot = resolve("dist/server");
   const workerConfig = JSON.parse(await readFile(resolve(serverRoot, "wrangler.json"), "utf8"));
   const dependencies = (await readdir(serverRoot, { recursive: true })).filter(file => /\.m?js$/.test(file) && file !== workerConfig.main);
@@ -19,13 +18,37 @@ test("self-hosted account binding and read-only bridge", async t => {
     compatibilityDate: workerConfig.compatibility_date,
     compatibilityFlags: workerConfig.compatibility_flags,
     d1Databases: { DB: "self-hosted-fixture" },
-    bindings: {
-      MICET_SELF_HOSTED: "1",
-      MICET_SITE_ORIGIN: siteOrigin,
-      MICET_BRIDGE_SECRET: bridgeSecret,
-    },
+    bindings,
   });
   t.after(() => worker.dispose());
+  return worker;
+}
+
+test("a retired display-only configuration cannot expose preview or live checkout", async t => {
+  for (const bindings of [{ MICET_LOCAL_TEST: "1" }, { MICET_SELF_HOSTED: "1" }]) {
+    const worker = await startWorker(t, { ...bindings, MICET_PUBLIC_LAUNCH: "1" });
+    for (const [method, path] of [["GET", "/"], ["GET", "/api/micet/shop"], ["POST", "/api/micet/checkout"]]) {
+      const response = await worker.dispatchFetch("http://localhost" + path, { method });
+      assert.equal(response.status, 503, method + " " + path);
+      assert.equal(response.headers.get("Cache-Control"), "no-store");
+      assert.match((await response.json()).error, /配置已过期/);
+    }
+  }
+});
+
+test("self-hosted account binding and read-only bridge", async t => {
+  const base = "http://localhost";
+  const worker = await startWorker(t, {
+    MICET_SELF_HOSTED: "1",
+    MICET_SITE_ORIGIN: siteOrigin,
+    MICET_BRIDGE_SECRET: bridgeSecret,
+  });
+  const home = await worker.dispatchFetch(base + "/");
+  assert.equal(home.status, 200);
+  const html = await home.text();
+  for (const view of ["stats", "ranking", "matches", "account", "shop"]) {
+    assert.ok(html.includes('href="#' + view + '"'), "Missing navigation for " + view);
+  }
   const db = await worker.getD1Database("DB");
   async function applyMigration(migration) {
     const sql = await readFile("drizzle/" + migration, "utf8");

@@ -25,7 +25,7 @@ MICET_PRICE_VAPE_FEN=
 MICET_PRICE_HEART_FEN=
 ```
 
-`XD_CHANNELS` 只填写账户实际开通的通道。要暂停新单，可清空渠道后重启，保留密钥和回调以继续处理已有订单。公网自托管使用 `MICET_SELF_HOSTED=1`，清除旧的 `MICET_PUBLIC_LAUNCH` 和 `MICET_LOCAL_TEST` 启动参数。平台私钥材料仅放在 VPS 的私有文件中，浏览器、插件和 Git 仓库都只需各自已有的配置。
+`XD_CHANNELS` 只填写账户实际开通的通道。要暂停新单，可清空渠道后重启，保留密钥和回调以继续处理已有订单。公网自托管使用 `MICET_SELF_HOSTED=1`，移除 `MICET_LOCAL_TEST`。从旧展示模式升级时，也请从启动参数和私有配置中删除 `MICET_PUBLIC_LAUNCH`。旧值为 `1` 时，页面和 API 会返回 HTTP 503。平台私钥材料仅放在 VPS 的私有文件中，浏览器、插件和 Git 仓库都只需各自已有的配置。
 
 ## 2. 更新网站和游戏服
 
