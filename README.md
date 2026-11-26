@@ -59,6 +59,7 @@ Point the staging hostname's Tunnel route at `http://127.0.0.1:8788`. Allow thes
 | Method | Paths |
 | --- | --- |
 | GET | `/api/micet/server-status`, `/api/micet/leaderboard`, `/api/micet/player`, `/api/micet/status`, `/api/micet/result` |
+
 | POST | `/api/micet/code`, `/api/micet/confirm`, `/api/micet/logout`, `/api/micet/stats`, `/api/bridge/link`, `/api/bridge/poll`, `/api/bridge/receipt` |
 
 Install MicetSiteBridge 0.3.2 or newer on the Bukkit Practice backend with MicetPvP and AquaCore. Its Elo leaderboard uses the same ranked and hidden kit flags as the public in-game queue menu. Update the website first so it can accept the larger match-detail receipts that contain multiple inventory snapshots. In the plugin's `config.yml`, use the same HTTPS origin and bridge secret as the website. [Plugin releases](https://github.com/BestBcz/MicetSiteBridge/releases)

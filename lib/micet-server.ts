@@ -215,7 +215,8 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
     return browserGet(db, action, request, minecraftOwner + linked.uuid, "bridge", linked);
   }
   const origin = env.MICET_SITE_ORIGIN?.trim();
-  if (!origin?.startsWith("https://") || request.headers.get("origin") !== origin) {
+  const fetchSite = request.headers.get("sec-fetch-site")?.trim().toLowerCase();
+  if (!origin?.startsWith("https://") || request.headers.get("origin") !== origin || (fetchSite && fetchSite !== "same-origin")) {
     throw new RequestError(403, "请求来源无效。");
   }
   const body = await readBody(request);
