@@ -39,7 +39,7 @@ function LookupFields({contact,password,onContact,onPassword,creating=false}:{co
       autoComplete="username" autoCapitalize="none" spellCheck={false} maxLength={254} required/>
     <label htmlFor="order-password">订单查询密码</label>
     <input id="order-password" className="shop-player" type="password" value={password} onChange={e=>onPassword(e.target.value)}
-      autoComplete={creating?"new-password":"current-password"} minLength={8} maxLength={128} required/>
+      autoComplete={creating?"new-password":"current-password"} minLength={5} maxLength={128} required/>
   </>;
 }
 
@@ -106,14 +106,14 @@ export function LiveShop({linked,onOrder}:{linked?:Link|null;onOrder:(id:string)
           const channel=offer?.channels.find(c=>c===button?.value);
           if(channel) void submit(channel);
         }}>
-          <small>请为这笔订单设一个独立查询密码（至少 8 个字符）。换设备时，用同一组 QQ 号或邮箱和密码查询。</small>
+          <small>请为这笔订单设一个独立查询密码（至少 5 个字符）。换设备时，用同一组 QQ 号或邮箱和密码查询。</small>
           <LookupFields creating contact={contact} password={password} onContact={setContact} onPassword={setPassword}/>
           <label htmlFor="order-confirm">确认查询密码</label>
           <input id="order-confirm" className="shop-player" type="password" autoComplete="new-password" value={confirm}
-            onChange={e=>setConfirm(e.target.value)} minLength={8} maxLength={128} required/>
+            onChange={e=>setConfirm(e.target.value)} minLength={5} maxLength={128} required/>
           {offer?.channels.map(c=><button key={c} value={c} disabled={busy} className="btn primary">{label[c]}</button>)}
         </form></>}
-      {busy && <p role="status">{recipient ? "正在准备收银台…" : "正在核验 AquaCore 玩家档案…"}</p>}</section>}
+      {busy && <p role="status">{recipient ? "正在准备收银台…" : "正在查找玩家档案…"}</p>}</section>}
     {error && <p role="alert">{error} {!offer && <button className="btn" onClick={()=>{setError("");retry(n=>n+1);}}>重试</button>}</p>}
   </>;
 }

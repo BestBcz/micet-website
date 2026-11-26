@@ -154,11 +154,12 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   await json("micet/recipient",lookup,guest,202);
   await receipt(await poll(),"ok",{uuid:friend,player:"Friend",owned:false});
   assert.deepEqual((await json("micet/recipient",lookup,guest)).recipient,{uuid:friend,player:"Friend"});
-  const guestKeys={contact:"  Gift@Example.COM ",password:"guest-order-secret"};
+  const guestKeys={contact:"  Gift@Example.COM ",password:"12345"};
   const gift={...lookup,...guestKeys,amount:600,channel:"ALIPAY_H5",recipientUuid:friend};
   await json("micet/checkout",{...gift,recipientUuid:uuid},guest,409);
   for(const who of [guest,otherAuth]){
     await json("micet/checkout",{...gift,password:""},who,400);
+    await json("micet/checkout",{...gift,password:"1234"},who,400);
     await json("micet/checkout",{...gift,contact:""},who,400);
   }
   const guestOrder=(await json("micet/checkout",gift,guest)).order;
@@ -177,6 +178,7 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   assert.deepEqual((await json("micet/orders",undefined,{...guest})).orders,[]);
   assert.deepEqual((await json("micet/orders",undefined,{...otherAuth})).orders,[]);
   const phone={"CF-Connecting-IP":"1.1.1.1"};
+  await json("micet/order-lookup",{...guestKeys,password:"1234"},phone,400);
   const wrong=await json("micet/order-lookup",{contact:"gift@example.com",password:"wrongpassword"},phone,401);
   const missing=await json("micet/order-lookup",{contact:"another@example.com",password:"wrongpassword"},phone,401);
   assert.equal(wrong.error,missing.error);

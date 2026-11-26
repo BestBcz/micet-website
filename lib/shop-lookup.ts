@@ -29,8 +29,8 @@ async function takeAttempt(db: D1Database, bucket: string, now: number, limit: n
 export async function orderLookupKey(db: D1Database, request: Request, body: Record<string,unknown>, creating: boolean) {
   const contact = contactId(body.contact);
   const password = body.password;
-  if (typeof password !== "string" || password.length < 8 || password.length > 128 || !password.trim())
-    throw new RequestError(400,"查询密码须为 8–128 个字符。");
+  if (typeof password !== "string" || password.length < 5 || password.length > 128 || !password.trim())
+    throw new RequestError(400,"查询密码须为 5–128 个字符。");
   const now = Date.now(), window = Math.floor(now / sessionLifetime);
   const id = await hashToken(contact);
   const address = await hashToken(request.headers.get("cf-connecting-ip") || "local");

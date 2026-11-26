@@ -44,7 +44,7 @@ export async function resolveRecipient(db: D1Database, player: unknown, sku: unk
   if (job.status==="failed") throw new RequestError(503,"游戏档案核验失败，请稍后再试。");
   if (job.status!=="done") return null;
   const result = JSON.parse(job.result ?? "null");
-  if (result?.found===false) throw new RequestError(404,"未找到唯一匹配的 AquaCore 玩家档案，请核对游戏 ID。");
+  if (result?.found===false) throw new RequestError(404,"未找到唯一匹配的玩家档案，请核对游戏 ID。");
   if (typeof result?.player!=="string" || result.player.toLowerCase()!==player.toLowerCase() ||
       !/^[A-Za-z0-9_]{1,16}$/.test(result.player) || typeof result.uuid!=="string" ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(result.uuid) || typeof result.owned!=="boolean")
