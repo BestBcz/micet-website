@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { currentLookup, lookupOrders } from "./shop-lookup";
-import { checkout, paymentEvent, reconcile, resolveRecipient, shopCatalog, shopOrders } from "./shop-server";
+import { checkout, continuePayment, paymentEvent, reconcile, resolveRecipient, shopCatalog, shopOrders } from "./shop-server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { demoMatchPattern, getDemoMatchDetail, matchUuidPattern } from "./micet-match-detail";
 import { getServerStatus } from "./micet-server-status";
@@ -226,6 +226,10 @@ async function selfHostedBrowser(db: D1Database, request: Request, action: strin
   if (action === "confirm") return confirmSiteLink(db, request);
   if (action === "logout") return endSiteSession(db, request);
   if (action === "order-lookup") return lookupOrders(db,request,body);
+  if (action === "continue-payment") {
+    const [linked, guest, key] = await Promise.all([siteSession(db,request), guestShopHash(request), currentLookup(db,request)]);
+    return continuePayment(db,request,body,linked ? "account:"+linked.uuid : null,guest ? "guest:"+guest : null,key);
+  }
   if (action === "recipient" || (action === "checkout" && body.sku !== TEST_SKU)) {
     const linked = await siteSession(db, request);
     const guest = linked ? null : await guestShopHash(request);

@@ -36,6 +36,13 @@
       "when": 1795594414493,
       "tag": "0004_order_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1795654200011,
+      "tag": "0005_cashier_recovery",
+      "breakpoints": true
     }
   ]
 }

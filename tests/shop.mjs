@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createHash, generateKeyPairSync, randomUUID, sign, verify } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Miniflare } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 const hash = v => createHash("sha256").update(v).digest("hex");
 const now = () => String(Math.floor(Date.now()/1000));
@@ -15,11 +15,13 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   const origin="https://shop.test", uuid=randomUUID(), token="ab".repeat(32);
   const secret="bridge-fixture-only-01234567890123456789", cash="https://cashier.test";
   const records=new Map();
+  const attempts=new Map(), attemptIds=[];
+  let afterAttempt, nextAlipayQr;
   let breakSignature=false;
   const root=resolve("dist/server");
   const config=JSON.parse(await readFile(resolve(root,"wrangler.json"),"utf8"));
   const files=(await readdir(root,{recursive:true})).filter(f=>/\.m?js$/.test(f));
-  const mf=new Miniflare({modulesRoot:root,modules:[config.main,...files.filter(f=>f!==config.main)].map(f=>({type:"ESModule",path:resolve(root,f)})),
+  const mf=new Miniflare(convertV4MiniflareOptions({modulesRoot:root,modules:[config.main,...files.filter(f=>f!==config.main)].map(f=>({type:"ESModule",path:resolve(root,f)})),
     compatibilityDate:config.compatibility_date,compatibilityFlags:config.compatibility_flags,d1Databases:{DB:"shop"},
     bindings:{MICET_SELF_HOSTED:"1",MICET_SITE_ORIGIN:origin,MICET_BRIDGE_SECRET:secret,MICET_PRICE_VAPE_FEN:"500",MICET_PRICE_HEART_FEN:"600",
       MICET_RECONCILE_TOKEN:"local-scheduler",XD_CHANNELS:"WECHAT_H5,ALIPAY_H5",XD_BASE_URL:"https://gateway.test",
@@ -28,8 +30,19 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
       const h=req.headers, path=new URL(req.url).pathname, body=await req.text(), rid=h.get("X-XD-Request-Id");
       const signed=["XD-Signature-v1",req.method,path,"",h.get("X-XD-Timestamp"),h.get("X-XD-Nonce"),"fixture","merchant",rid,h.get("Content-Type")??"",hash(body)].join("\n");
       assert(verify("sha256",Buffer.from(signed),merchant.publicKey,Buffer.from(h.get("X-XD-Sign"),"base64")));
-      let order;
-      if(req.method==="POST"){
+      let order, status=200;
+      if(req.method==="POST" && path.endsWith("/attempts")){
+        const stored=records.get(path.split("/").at(-2));
+        assert.deepEqual(JSON.parse(body),{});
+        attemptIds.push(rid);
+        if(!attempts.has(rid)){
+          assert.equal(stored.nextAction,"CREATE_ATTEMPT");
+          Object.assign(stored,{payUrl:cash+"/attempt/"+rid,qrCode:stored.channel==="ALIPAY_H5" ? nextAlipayQr??null : null,nextAction:null});
+          attempts.set(rid,{...stored});
+        }
+        order=attempts.get(rid);
+        if(afterAttempt) await afterAttempt();
+      }else if(req.method==="POST"){
         const input=JSON.parse(body);
         assert.equal(input.payerClientIp,"8.8.8.8");
         assert.equal(input.returnUrl,origin+"/api/payments/return");
@@ -38,13 +51,14 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
         records.set(input.outTradeNo,order);
       }else {
         const stored=records.get(path.split("/").pop());
-        order={...stored,payUrl:null,qrCode:null};
+        if(!stored) status=404;
+        order=stored ? {...stored,payUrl:null,qrCode:null} : {code:"OPEN_API_NOT_FOUND"};
       }
       const data=JSON.stringify(order), ts=now(), nonce=randomUUID();
-      return new Response(data,{headers:{"Content-Type":"application/json",
+      return new Response(data,{status,headers:{"Content-Type":"application/json",
         "X-XD-Response-Key-Id":"provider","X-XD-Response-Timestamp":ts,"X-XD-Response-Nonce":nonce,
-        "X-XD-Response-Sign":signLines(["XD-Response-v1","200","application/json",rid,ts,nonce,"provider",hash(data)],breakSignature?merchant.privateKey:provider.privateKey)}});
-    }});
+        "X-XD-Response-Sign":signLines(["XD-Response-v1",String(status),"application/json",rid,ts,nonce,"provider",hash(data)],breakSignature?merchant.privateKey:provider.privateKey)}});
+    }}));
   t.after(()=>mf.dispose());
   const db=await mf.getD1Database("DB");
   const legacyUuid=randomUUID();
@@ -71,6 +85,11 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   const buyerKeys={contact:"123456789",password:"example-check-buyer"};
   const buy=(sku,status=200)=>json("micet/checkout",{...buyerKeys,sku,amount:sku==="Vape"?500:600,channel:sku==="Vape"?"WECHAT_H5":"ALIPAY_H5"},auth,status);
   const orders=async()=>(await json("micet/orders",undefined,auth)).orders;
+  const resume=(id,headers=auth,status=200)=>json("micet/continue-payment",{id},headers,status);
+  async function reconcileNow(){
+    await db.prepare("UPDATE shop_orders SET next_check=0").run();
+    await json("payments/reconcile",{}, {Authorization:"Bearer local-scheduler"});
+  }
   async function event(order,type,{id=randomUUID(),amount=order.amount,bad=false,gross=order.amount}={}){
     const ts=now(),nonce=randomUUID(),state=type.split("_")[1];
     const e={eventId:id,eventType:type,appId:"fixture",outTradeNo:order.id,status:state,grossAmountFen:gross,eventAmountFen:amount};
@@ -83,6 +102,8 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   const legacyToken="ef".repeat(32);
   await db.prepare("INSERT INTO web_sessions VALUES(?,?,?,?)").bind(hash(legacyToken),legacyUuid,"Legacy",Date.now()+60000).run();
   assert.deepEqual((await json("micet/orders",undefined,{Cookie:"__Host-micet-session="+legacyToken})).orders.map(o=>o.id),["legacy"]);
+  assert.equal((await resume("legacy",{Cookie:"__Host-micet-session="+legacyToken})).order.status,"delivered");
+  await resume("legacy",{},404);
   const back=await mf.dispatchFetch(origin+"/api/payments/return?status=SUCCEEDED",{redirect:"manual"});
   assert.equal(back.status,303);
   assert.equal(new URL(back.headers.get("Location"),origin).hash,"#orders");
@@ -97,12 +118,64 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   const vape=a.order;
   assert.equal(vape.pay_url,cash+"/order/"+vape.id);
   assert.equal(vape.qr_url,null);
+  await resume(vape.id,{},404);
+  await json("micet/continue-payment",{id:vape.id,amount:1},auth,400);
+  await json("micet/continue-payment",{id:vape.id},{...auth,Origin:"https://other.test"},403);
+  assert.equal((await resume(vape.id)).order.pay_url,vape.pay_url);
+  assert.equal(attempts.size,0);
   assert.equal((await event(vape,"PAYMENT_SUCCEEDED",{bad:true})).status,401);
   assert.equal((await event(vape,"PAYMENT_SUCCEEDED",{gross:1})).status,409);
   assert.equal((await orders())[0].status,"pending");
   await db.prepare("UPDATE shop_orders SET next_check=0").run();
   await json("payments/reconcile",{}, {Authorization:"Bearer local-scheduler"});
   assert.equal((await orders())[0].pay_url,vape.pay_url);
+  const storedVape=records.get(vape.id);
+  Object.assign(storedVape,{nextAction:"CREATE_ATTEMPT",closeState:"CLOSE_PENDING"});
+  await reconcileNow();
+  assert.equal((await orders())[0].pay_url,null);
+  assert.equal((await resume(vape.id)).order.pay_url,null);
+  assert.equal(attempts.size,0);
+  delete storedVape.closeState;
+  storedVape.status="UNKNOWN";
+  assert.equal((await resume(vape.id)).order.pay_url,null);
+  assert.equal(attempts.size,0);
+  storedVape.status="CREATED";
+  storedVape.latestAttempt={status:"UNKNOWN"};
+  assert.equal((await resume(vape.id)).order.pay_url,null);
+  assert.equal(attempts.size,0);
+  delete storedVape.latestAttempt;
+  const secondDevice={"CF-Connecting-IP":"1.1.1.1"};
+  await json("micet/order-lookup",buyerKeys,secondDevice);
+  const reached=Promise.withResolvers(), release=Promise.withResolvers();
+  afterAttempt=async()=>{reached.resolve();await release.promise;};
+  const renewing=resume(vape.id,secondDevice);
+  try {
+    await reached.promise;
+    assert.equal((await resume(vape.id)).order.pay_url,null);
+    assert.equal((await buy("Vape")).order.id,vape.id);
+    assert.equal(attemptIds.length,1);
+  } finally {release.resolve();}
+  const refreshed=(await renewing).order;
+  afterAttempt=undefined;
+  assert.equal(refreshed.id,vape.id);
+  assert.equal(refreshed.pay_url,storedVape.payUrl);
+  assert.notEqual(refreshed.pay_url,vape.pay_url);
+  storedVape.nextAction="CREATE_ATTEMPT";
+  afterAttempt=()=>new Promise(resolve=>setTimeout(resolve,8500));
+  await resume(vape.id,auth,503);
+  afterAttempt=undefined;
+  const recovered=(await buy("Vape")).order;
+  assert.equal(recovered.pay_url,storedVape.payUrl);
+  assert.equal(attemptIds.at(-1),attemptIds.at(-2));
+  assert.equal(attempts.size,2);
+  // A lost receipt can be retried after that attempt has itself expired.
+  const previousId=attemptIds.at(-1);
+  await db.prepare("UPDATE shop_orders SET attempt_request=?,pay_url=NULL WHERE id=?").bind(previousId,vape.id).run();
+  storedVape.nextAction="CREATE_ATTEMPT";
+  assert.equal((await resume(vape.id)).order.pay_url,null);
+  assert.equal(attemptIds.at(-1),previousId);
+  assert.notEqual((await resume(vape.id)).order.pay_url,recovered.pay_url);
+  assert.notEqual(attemptIds.at(-1),previousId);
   records.get(vape.id).status="SUCCEEDED";
   await db.prepare("UPDATE shop_orders SET next_check=0").run();
   await json("payments/reconcile",{}, {Authorization:"Bearer local-scheduler"});
@@ -120,6 +193,23 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   await db.prepare("DELETE FROM bridge_jobs WHERE id=?").bind(heartCheck.id).run();
   await buy("Heart",202);await receipt(await poll(),"ok",confirmed);const {order:heart}=await buy("Heart");
   assert.equal(heart.qr_url,"https://qr.alipay.com/test");
+  records.get(heart.id).nextAction="CREATE_ATTEMPT";
+  const previousAttempts=attemptIds.length;
+  await reconcileNow();
+  const invalidated=(await orders()).find(o=>o.id===heart.id);
+  assert.equal(invalidated.pay_url,null);
+  assert.equal(invalidated.qr_url,null);
+  assert.equal(attemptIds.length,previousAttempts);
+  const renewedHeart=(await buy("Heart")).order;
+  assert.equal(renewedHeart.id,heart.id);
+  assert.equal(renewedHeart.qr_url,null);
+  assert.notEqual(renewedHeart.pay_url,heart.pay_url);
+  nextAlipayQr="https://qr.alipay.com/new";
+  records.get(heart.id).nextAction="CREATE_ATTEMPT";
+  const newCode=(await resume(heart.id)).order;
+  assert.equal(newCode.qr_url,nextAlipayQr);
+  assert.notEqual(newCode.pay_url,renewedHeart.pay_url);
+  nextAlipayQr=undefined;
   await event(heart,"PAYMENT_CLOSED",{amount:0});await event(heart,"PAYMENT_SUCCEEDED");await event(heart,"REFUND_SUCCEEDED");
   assert.equal(await poll(),null);await event(heart,"PAYMENT_SUCCEEDED");
   assert.equal((await orders()).find(o=>o.id===heart.id).status,"refunded");
@@ -166,7 +256,14 @@ test("signed checkout, order isolation, reconciliation, delivery leases and refu
   await json("micet/checkout",gift,otherAuth,409);
   assert.deepEqual((await json("micet/orders",undefined,guest)).orders.map(o=>o.id),[guestOrder.id]);
   assert.deepEqual((await json("micet/orders",undefined,otherAuth)).orders,[]);
-  await event(guestOrder,"PAYMENT_SUCCEEDED");
+  records.get(guestOrder.id).nextAction="CREATE_ATTEMPT";
+  afterAttempt=async()=>{assert.equal((await event(guestOrder,"PAYMENT_SUCCEEDED")).status,200);};
+  const paidDuringRenewal=(await resume(guestOrder.id,guest)).order;
+  afterAttempt=undefined;
+  assert.equal(paidDuringRenewal.status,"paid");
+  assert.equal(paidDuringRenewal.pay_url,null);
+  assert.equal(paidDuringRenewal.qr_url,null);
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM bridge_jobs WHERE id=? AND kind='shop-deliver'").bind(guestOrder.id).first()).n,1);
   const grant=await poll();assert.equal(grant.payload.uuid,friend);await receipt(grant,"ok");
   assert.equal((await json("micet/orders",undefined,guest)).orders[0].status,"delivered");
   const boundGift={...gift,password:"independent-password",sku:"Vape",channel:"WECHAT_H5",amount:500};

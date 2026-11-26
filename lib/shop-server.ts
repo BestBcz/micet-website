@@ -5,7 +5,8 @@ import { json, RequestError } from "./micet-http";
 import { channels, GatewayRejection, paymentUrl, readEvent, xdRequest, type Fields, type XDChannel } from "./xiaodou";
 
 type ShopOrder = { id: string; uuid: string; player: string; sku: string; amount: number; channel: XDChannel;
-  status: string; created_at: number; pay_url: string | null; qr_url: string | null; expires_at: number | null; next_check:number; detail: string | null; lookup_key: string | null };
+  status: string; created_at: number; pay_url: string | null; qr_url: string | null; expires_at: number | null; next_check:number; detail: string | null; lookup_key: string | null;
+  cashier_version: number; attempt_request: string | null; attempt_until: number };
 export function products() {
   return catalog.map(tag => {
     const value = tag.name === "Vape" ? env.MICET_PRICE_VAPE_FEN : tag.name === "Heart" ? env.MICET_PRICE_HEART_FEN : undefined;
@@ -18,12 +19,14 @@ const exposed = (o: ShopOrder) => ({ id:o.id, player:o.player, sku:o.sku, amount
   status:o.status, created_at:o.created_at, expires_at:o.expires_at, detail:o.detail,
   pay_url:o.status === "pending" && Number(o.expires_at) > Date.now() ? o.pay_url : null,
   qr_url:o.status === "pending" && Number(o.expires_at) > Date.now() ? o.qr_url : null });
+function visibleOrders(db: D1Database, account: string | null, guest: string | null, key: string | null, suffix: string, ...args: string[]) {
+  return key
+    ? db.prepare("SELECT * FROM shop_orders WHERE lookup_key=? " + suffix).bind(key,...args)
+    : db.prepare("SELECT * FROM shop_orders WHERE lookup_key IS NULL AND buyer IN (?,?) " + suffix).bind(account,guest,...args);
+}
 export async function shopOrders(db: D1Database, account: string | null, guest: string | null, key: string | null) {
   if (!account && !guest && !key) return json({orders:[],unlocked:false});
-  const rows = key
-    ? await db.prepare("SELECT * FROM shop_orders WHERE lookup_key=? ORDER BY created_at DESC LIMIT 100").bind(key).all<ShopOrder>()
-    : await db.prepare("SELECT * FROM shop_orders WHERE lookup_key IS NULL AND buyer IN (?,?) ORDER BY created_at DESC LIMIT 100")
-        .bind(account,guest).all<ShopOrder>();
+  const rows = await visibleOrders(db, account, guest, key, "ORDER BY created_at DESC LIMIT 100").all<ShopOrder>();
   return json({ orders: rows.results.map(exposed), unlocked:Boolean(key) });
 }
 const merchantOrder = (db: D1Database, id: string) => db.prepare("SELECT * FROM shop_orders WHERE id=?").bind(id).first<ShopOrder>();
@@ -60,7 +63,7 @@ export async function checkout(db: D1Database, request: Request, body: Fields, l
   if (body.amount !== item.amount) throw new RequestError(409,"商品价格已变更，请重新打开商店确认。");
   const key = await orderLookupKey(db, request, body, true);
   const now = Date.now();
-  await db.prepare("INSERT OR IGNORE INTO shop_orders(id,uuid,player,sku,amount,channel,status,created_at,next_check,buyer,lookup_key) " +
+  const inserted = await db.prepare("INSERT OR IGNORE INTO shop_orders(id,uuid,player,sku,amount,channel,status,created_at,next_check,buyer,lookup_key) " +
     "SELECT ?,?,?,?,?,?,'pending',?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM shop_orders WHERE uuid=? AND sku=? AND status IN ('paid','delivered','review','refund_review','duplicate'))")
     .bind("MC"+crypto.randomUUID().replaceAll("-",""),link.uuid,link.player,item.name,item.amount,channel,now,now+60_000,buyer,key,link.uuid,item.name).run();
   const order = await db.prepare("SELECT * FROM shop_orders WHERE buyer=? AND uuid=? AND sku=? AND status='pending'")
@@ -69,11 +72,16 @@ export async function checkout(db: D1Database, request: Request, body: Fields, l
   if (!order.lookup_key) throw new RequestError(409,"已有历史待付订单，请从原购买记录继续。");
   if (order.lookup_key!==key) throw new RequestError(409,"已有待付订单，请使用下单时的查询账号和密码。");
   if (order.amount!==item.amount || order.channel!==channel) throw new RequestError(409,"你已为该角色创建过待付订单，请在「我的订单」确认原订单的金额和支付方式。");
-  if (order.pay_url && Number(order.expires_at)>Date.now()) return unlockOrders(db,request,key,json({order:exposed(order)}));
-  if (order.expires_at && order.expires_at<=Date.now()) {
-    await reconcileOne(db,order);
-    throw new RequestError(409,"原支付窗口已到期，请刷新订单状态后再购买。");
+  if (inserted.meta.changes) {
+    const state = await createCashier(db, request, order);
+    if (state === "renew") await recoverCashier(db, request, order);
+  } else {
+    await recoverCashier(db, request, order);
   }
+  return unlockOrders(db,request,key,json({order:exposed((await merchantOrder(db,order.id))!)}));
+}
+
+async function createCashier(db: D1Database, request: Request, order: ShopOrder) {
   const ip = request.headers.get("cf-connecting-ip");
   if (!ip) throw new RequestError(503,"支付入口未取得买家公网地址。");
   let snapshot: Fields;
@@ -83,12 +91,11 @@ export async function checkout(db: D1Database, request: Request, body: Fields, l
       returnUrl:new URL("/api/payments/return",env.MICET_SITE_ORIGIN).href});
   } catch (error) {
     if (error instanceof GatewayRejection && [400,422].includes(error.gatewayStatus)) {
-      await db.prepare("UPDATE shop_orders SET status='failed' WHERE id=? AND status='pending' AND pay_url IS NULL").bind(order.id).run();
+      await db.prepare("UPDATE shop_orders SET status='failed' WHERE id=? AND status='pending' AND expires_at IS NULL AND cashier_version=?").bind(order.id,order.cashier_version).run();
     }
     throw error;
   }
-  await acceptSnapshot(db,order,snapshot);
-  return unlockOrders(db,request,key,json({order:exposed((await merchantOrder(db,order.id))!)}));
+  return acceptSnapshot(db,order,snapshot);
 }
 
 async function applyState(db: D1Database, order: ShopOrder, type: string, amount: number, eventId?: string) {
@@ -119,15 +126,87 @@ async function acceptSnapshot(db: D1Database, order: ShopOrder, data: Fields, ch
   if (data.outTradeNo!==order.id || data.amountFen!==order.amount || data.currency!=="CNY" || data.channel!==order.channel) throw new RequestError(502,"网关订单不匹配。");
   if (data.status==="SUCCEEDED" || data.status==="CLOSED" || data.status==="FAILED") {
     await applyState(db,order,"PAYMENT_"+data.status,order.amount);
-  } else if (data.status==="CREATED" || data.status==="PAYING") {
-    // Query snapshots never contain cashier URLs. Keep the material issued at checkout.
-    if (checking) return;
+    return "terminal";
+  }
+  const until = Date.parse(String(data.expireAt));
+  const latest = data.latestAttempt as Fields | null | undefined;
+  const attemptState = latest?.status ?? latest?.state;
+  const payable = (data.status==="CREATED" || data.status==="PAYING") && !data.unknown &&
+    attemptState!=="UNKNOWN" && attemptState!=="PAID" &&
+    data.closeState!=="CLOSE_PENDING" && data.closeState!=="UNKNOWN_KEPT" && Number.isFinite(until) && until>Date.now();
+  if (!payable || data.nextAction==="CREATE_ATTEMPT") {
+    // A query read before another request renewed the code must not invalidate the new code.
+    const changed = await db.prepare("UPDATE shop_orders SET pay_url=NULL,qr_url=NULL,cashier_version=cashier_version+1 " +
+      "WHERE id=? AND status='pending' AND cashier_version=? AND (pay_url IS NOT NULL OR qr_url IS NOT NULL OR (? AND attempt_until>0))")
+      .bind(order.id,order.cashier_version,checking && !payable ? 1 : 0).run();
+    if (changed.meta.changes) order.cashier_version++;
+    return payable ? "renew" : "wait";
+  }
+  // Query snapshots have no URLs even when the existing cashier is still usable.
+  if (!checking) {
     const pay = paymentUrl(data.payUrl,env.XD_CASHIER_ORIGIN);
     const qr = order.channel==="ALIPAY_H5" ? paymentUrl(data.qrCode,"https://qr.alipay.com") : null;
-    const until = Date.parse(String(data.expireAt));
-    if (!pay || !Number.isFinite(until)) throw new RequestError(502,"平台收银地址或有效期无效。");
-    await db.prepare("UPDATE shop_orders SET pay_url=?,qr_url=COALESCE(?,qr_url),expires_at=? WHERE id=? AND status='pending'").bind(pay,qr,until,order.id).run();
-  } else throw new RequestError(502,"订单状态待核实。");
+    if (!pay) throw new RequestError(502,"平台收银地址无效。");
+    await db.prepare("UPDATE shop_orders SET pay_url=?,qr_url=?,expires_at=?,attempt_request=NULL,attempt_until=0,cashier_version=cashier_version+1 " +
+      "WHERE id=? AND status='pending' AND cashier_version=?").bind(pay,qr,until,order.id,order.cashier_version).run();
+  }
+  return "active";
+}
+
+async function recoverCashier(db: D1Database, request: Request, order: ShopOrder) {
+  if (order.status!=="pending" || order.attempt_until>Date.now()) return;
+  const path = "/api/open/v1/payments/" + encodeURIComponent(order.id);
+  let snapshot: Fields;
+  try {
+    snapshot = await xdRequest(path);
+  } catch (error) {
+    if (!(error instanceof GatewayRejection && error.gatewayStatus===404 && order.expires_at===null && !order.attempt_request)) throw error;
+    // A local order can exist before the first gateway request was received.
+    if (await createCashier(db,request,order)!=="renew") return;
+    snapshot = await xdRequest(path);
+  }
+  const state = await acceptSnapshot(db,order,snapshot,true);
+  if (state==="terminal" || state==="wait") return;
+  if (state==="active" && !order.attempt_request) {
+    if (!exposed(order).pay_url) {
+      // Recover lost initial issuance via the platform's same-order business replay.
+      if (await createCashier(db,request,order)!=="renew") return;
+    } else return;
+  }
+  const now = Date.now();
+  const claimed = await db.prepare("UPDATE shop_orders SET attempt_request=COALESCE(attempt_request,?),attempt_until=?," +
+    "cashier_version=cashier_version+1,pay_url=NULL,qr_url=NULL WHERE id=? AND status='pending' AND cashier_version=? AND attempt_until<=? RETURNING *")
+    .bind(crypto.randomUUID(),now+30_000,order.id,order.cashier_version,now).first<ShopOrder>();
+  if (!claimed) return;
+  try {
+    const issued = await xdRequest(path+"/attempts",{},claimed.attempt_request!);
+    // Replaying an ambiguous request returns its original receipt, even if its code has since expired.
+    const current = order.attempt_request ? await acceptSnapshot(db,claimed,await xdRequest(path),true) : "active";
+    const result = current==="active" ? await acceptSnapshot(db,claimed,issued) : current;
+    if (result==="renew") {
+      await db.prepare("UPDATE shop_orders SET attempt_request=NULL WHERE id=? AND cashier_version=?")
+        .bind(order.id,claimed.cashier_version).run();
+    }
+  } catch (error) {
+    // A signed definitive rejection ends this attempt. Ambiguous failures retain its replay ID.
+    if (error instanceof GatewayRejection && ([400,403,404,422].includes(error.gatewayStatus) || error.code==="OPEN_API_STATE_INVALID")) {
+      await db.prepare("UPDATE shop_orders SET attempt_request=NULL WHERE id=? AND cashier_version=?")
+        .bind(order.id,claimed.cashier_version).run();
+    }
+    if (error instanceof GatewayRejection && error.gatewayStatus===409) return;
+    throw error;
+  } finally {
+    await db.prepare("UPDATE shop_orders SET attempt_until=0 WHERE id=? AND cashier_version=?")
+      .bind(order.id,claimed.cashier_version).run();
+  }
+}
+
+export async function continuePayment(db: D1Database, request: Request, body: Fields, account: string|null, guest: string|null, key: string|null) {
+  if (Object.keys(body).length!==1 || typeof body.id!=="string" || !/^[A-Za-z0-9_-]{1,64}$/.test(body.id)) throw new RequestError(400,"订单号无效。");
+  const order = await visibleOrders(db,account,guest,key,"AND id=?",body.id).first<ShopOrder>();
+  if (!order) throw new RequestError(404,"找不到该订单。");
+  await recoverCashier(db,request,order);
+  return json({order:exposed((await merchantOrder(db,order.id))!)});
 }
 
 export async function paymentEvent(db: D1Database, request: Request) {
@@ -150,8 +229,9 @@ async function reconcileOne(db:D1Database, order:ShopOrder) {
   try {
     await acceptSnapshot(db,order,await xdRequest("/api/open/v1/payments/"+order.id),true);
   } catch (error) {
-    if (!(error instanceof GatewayRejection && error.gatewayStatus===404 && !order.pay_url && Date.now()-order.created_at>900_000)) throw error;
-    await db.prepare("UPDATE shop_orders SET status='closed' WHERE id=? AND status='pending' AND pay_url IS NULL").bind(order.id).run();
+    if (!(error instanceof GatewayRejection && error.gatewayStatus===404 && order.expires_at===null && !order.attempt_request && Date.now()-order.created_at>900_000)) throw error;
+    await db.prepare("UPDATE shop_orders SET status='closed' WHERE id=? AND status='pending' AND expires_at IS NULL AND attempt_request IS NULL AND cashier_version=?")
+      .bind(order.id,order.cashier_version).run();
   }
 }
 export async function reconcile(db:D1Database) {

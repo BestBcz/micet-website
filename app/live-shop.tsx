@@ -24,7 +24,7 @@ function Cashier({order}:{order:Purchase}) {
     qr.make();
     return qr.createDataURL(5,20);
   },[material]);
-  if (!order.pay_url || !image) return <p>{order.expires_at ? "支付窗口已结束，正在核对订单。" : "支付入口尚未生成，请返回商店继续下单。"}</p>;
+  if (!order.pay_url || !image) return <p>当前没有可用的付款码。点击「继续付款」检查原订单。</p>;
   return <div className="vstack">
     {image && <img src={image} alt={label[order.channel]+"付款二维码"} width={210} height={210} style={{maxWidth:"100%",height:"auto",imageRendering:"pixelated"}}/>}
     <a className="btn primary" href={order.pay_url} rel="noreferrer" referrerPolicy="no-referrer">打开{label[order.channel]}收银台</a>
@@ -118,6 +118,28 @@ export function LiveShop({linked,onOrder}:{linked?:Link|null;onOrder:(id:string)
   </>;
 }
 
+function PaymentDetails({order,onUpdate}:{order:Purchase;onUpdate:(order:Purchase)=>void}) {
+  const [checking,setChecking]=useState(false);
+  const [notice,setNotice]=useState("");
+  const [unverifiedUrl,setUnverifiedUrl]=useState<string|null>(null);
+  async function resume() {
+    setChecking(true);
+    setNotice("");
+    try {
+      const result=await api<{order:Purchase}>("continue-payment",{id:order.id});
+      setUnverifiedUrl(null);
+      onUpdate(result.order);
+      if(result.order.status==="pending" && !result.order.pay_url) setNotice("支付状态正在核对，请稍后再试。");
+    } catch(e) {setUnverifiedUrl(order.pay_url);setNotice((e as Error).message);}
+    finally {setChecking(false);}
+  }
+  return <div className="vstack">
+    {!checking && (!unverifiedUrl || unverifiedUrl!==order.pay_url) && <Cashier order={order}/>}
+    <button className="btn" disabled={checking} onClick={()=>void resume()}>{checking?"正在核对订单…":"继续付款"}</button>
+    {notice && <p role="status">{notice}</p>}
+  </div>;
+}
+
 export function LiveOrders({linked,focus}:{linked?:Link|null;focus?:string}) {
   const [orders,setOrders]=useState<Purchase[]>();
   const [contact,setContact]=useState("");
@@ -166,6 +188,9 @@ export function LiveOrders({linked,focus}:{linked?:Link|null;focus?:string}) {
         <h2>{o.sku} · {price(o.amount)}</h2><p>{o.player} · 永久解锁 · {label[o.channel]}</p><strong>{states[o.status]??"待核查"}</strong>
         {o.status==="paid" && <small>正在向收货角色发放，离线也可到账。</small>}
         {o.status==="pending" && <><button className="btn" onClick={()=>expand((expanded??orders[0].id)===o.id?"":o.id)}>付款详情</button>
-        {(expanded===o.id || (expanded===null && index===0)) && <Cashier order={o}/>}</>}
+        {(expanded===o.id || (expanded===null && index===0)) && <PaymentDetails order={o} onUpdate={updated=>{
+          setOrders(list=>list?.map(existing=>existing.id===updated.id?updated:existing));
+          refresh(n=>n+1);
+        }}/>}</>}
         <small>订单 {o.id}</small></article>)}</div>}</>;
 }

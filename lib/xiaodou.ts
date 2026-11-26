@@ -37,32 +37,34 @@ async function verify(kid: string, ts: string, signature: string, lines: string[
 }
 
 export class GatewayRejection extends RequestError {
-  constructor(readonly gatewayStatus: number, id: string) {
+  constructor(readonly gatewayStatus: number, id: string, readonly code: unknown) {
     super(502, "支付平台暂未受理，请求编号 " + id);
   }
 }
 
-export async function xdRequest(path: string, body?: Fields): Promise<Fields> {
+export async function xdRequest(path: string, body?: Fields, id: string = crypto.randomUUID()): Promise<Fields> {
   const method = body ? "POST" : "GET";
   const content = body ? "application/json" : "";
   const raw = utf8.encode(body ? JSON.stringify(body) : "");
   const url = new URL((env.XD_BASE_URL ?? "").replace(/\/$/, "") + path);
   if (url.protocol !== "https:" || url.search || url.hash) throw new RequestError(503, "支付网关配置无效。");
-  const id = crypto.randomUUID(), nonce = crypto.randomUUID(), ts = String(Math.floor(Date.now()/1000));
+  const nonce = crypto.randomUUID(), ts = String(Math.floor(Date.now()/1000));
   const app = env.XD_APP_ID!, kid = env.XD_KEY_ID!;
   const signed = ["XD-Signature-v1", method, decodeURIComponent(url.pathname), "", ts, nonce, app, kid, id, content, await hash(raw)].join("\n");
   const key = await crypto.subtle.importKey("pkcs8", pem(env.XD_PRIVATE_KEY!), rsa, false, ["sign"]);
   const signature = base64(await crypto.subtle.sign(rsa.name, key, utf8.encode(signed)));
   const response = await fetch(url, { method, redirect: "manual", cache: "no-store", signal: AbortSignal.timeout(8000),
     headers: { "X-XD-App-Id": app, "X-XD-Key-Id": kid, "X-XD-Timestamp": ts, "X-XD-Nonce": nonce,
-      "X-XD-Request-Id": id, "X-XD-Sign": signature, ...(body ? {"Content-Type":content} : {}) }, body: body ? raw : undefined });
+      "X-XD-Request-Id": id, "X-XD-Sign": signature, ...(body ? {"Content-Type":content} : {}) }, body: body ? raw : undefined })
+    .catch(() => { throw new RequestError(503,"支付平台连接中断，请稍后从原订单重试。"); });
   const data = new Uint8Array(await response.arrayBuffer());
   if (!response.headers.has("X-XD-Response-Sign")) throw new RequestError(502, "支付网关未确认请求，请联系管理员。请求编号 " + id);
   const h = response.headers, rk = header(h,"X-XD-Response-Key-Id"), rt = header(h,"X-XD-Response-Timestamp");
   await verify(rk, rt, header(h,"X-XD-Response-Sign"), ["XD-Response-v1", String(response.status),
     header(h,"Content-Type").split(";")[0].trim().toLowerCase(), id, rt, header(h,"X-XD-Response-Nonce"), rk], data);
-  if (!response.ok) throw new GatewayRejection(response.status, id);
-  return JSON.parse(new TextDecoder().decode(data));
+  const payload = JSON.parse(new TextDecoder().decode(data));
+  if (!response.ok) throw new GatewayRejection(response.status, id, payload?.code);
+  return payload;
 }
 
 export async function readEvent(request: Request) {

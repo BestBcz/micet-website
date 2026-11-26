@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { Miniflare } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 const siteOrigin = "https://micet-test.example.invalid";
 const bridgeSecret = "micet-self-hosted-integration-fixture-secret";
@@ -12,14 +12,14 @@ async function startWorker(t, bindings) {
   const serverRoot = resolve("dist/server");
   const workerConfig = JSON.parse(await readFile(resolve(serverRoot, "wrangler.json"), "utf8"));
   const dependencies = (await readdir(serverRoot, { recursive: true })).filter(file => /\.m?js$/.test(file) && file !== workerConfig.main);
-  const worker = new Miniflare({
+  const worker = new Miniflare(convertV4MiniflareOptions({
     modulesRoot: serverRoot,
     modules: [workerConfig.main, ...dependencies].map(file => ({ type: "ESModule", path: resolve(serverRoot, file) })),
     compatibilityDate: workerConfig.compatibility_date,
     compatibilityFlags: workerConfig.compatibility_flags,
     d1Databases: { DB: "self-hosted-fixture" },
     bindings,
-  });
+  }));
   t.after(() => worker.dispose());
   return worker;
 }

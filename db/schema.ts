@@ -6,6 +6,7 @@ export const shopOrders = sqliteTable("shop_orders", {
   amount: integer().notNull(), channel: text().notNull(), status: text().notNull(),
   pay_url: text(), qr_url: text(), expires_at: integer(), next_check: integer().notNull(),
   created_at: integer().notNull(), detail: text(), buyer: text(), lookup_key: text(),
+  cashier_version: integer().notNull().default(0), attempt_request: text(), attempt_until: integer().notNull().default(0),
 }, table => [
   uniqueIndex("shop_open_product").on(table.uuid, table.sku).where(sql`status IN ('pending','paid','delivered','review')`),
   index("shop_lookup_orders").on(table.lookup_key, table.created_at),
